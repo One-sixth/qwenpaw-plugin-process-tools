@@ -1,0 +1,151 @@
+{
+  "process_tools_exec": {
+    "type": "function",
+    "function": {
+      "name": "process_tools_exec",
+      "description": "启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令在系统默认 shell（POSIX /bin/sh、Windows cmd.exe）中以管道方式执行，无 TTY，进度条类程序会自行降级为普通输出。每个会话同时最多有 5 个运行中进程，已结束的不占名额。",
+      "parameters": {
+        "properties": {
+          "command": {
+            "description": "要执行的 shell 命令字符串，跨平台写法自行负责（如需要 PowerShell 就写 powershell -Command \"...\"）。",
+            "type": "string"
+          },
+          "background": {
+            "default": false,
+            "description": "是否后台运行。False=前台等待结束再返回（默认），True=启动后立即返回进程编号。",
+            "type": "boolean"
+          },
+          "timeout": {
+            "default": 60,
+            "description": "前台模式等待秒数，超时后强杀进程并返回超时前输出末尾倒数 20 行。0 或负数表示永不超时一直等。后台模式忽略此参数。",
+            "type": "integer"
+          },
+          "cwd": {
+            "default": "",
+            "description": "工作目录，相对路径相对于 workspace。空串表示使用 workspace 目录。",
+            "type": "string"
+          },
+          "max_output_chars": {
+            "default": 4096,
+            "description": "前台模式返回输出的字符上限，超出则截断并提示完整日志路径，上限 16384。",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "process_tools_list": {
+    "type": "function",
+    "function": {
+      "name": "process_tools_list",
+      "description": "列出当前会话创建的全部托管进程（每行：编号、状态、退出码、运行时长、命令摘要）。进程按会话隔离，看不到也管不了其他会话的进程。运行中进程超过 5 个时无法再启动新进程，已结束的不占名额。",
+      "parameters": {
+        "properties": {},
+        "type": "object"
+      }
+    }
+  },
+  "process_tools_check": {
+    "type": "function",
+    "function": {
+      "name": "process_tools_check",
+      "description": "查看本会话某个托管进程的当前状态：运行中/已完成/失败/已终止、退出码、已运行时长、命令、日志路径，以及净化输出日志的末尾若干行。已结束进程同样可查（历史保留在会话内）。",
+      "parameters": {
+        "properties": {
+          "process_id": {
+            "description": "进程编号 #N（exec 返回的编号，支持 1、\"1\"、\"#1\" 三种写法）。"
+          },
+          "tail_lines": {
+            "default": 20,
+            "description": "返回输出日志的末尾行数，默认 20，最大 200；0 表示不看输出只看状态。",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "process_tools_communicate": {
+    "type": "function",
+    "function": {
+      "name": "process_tools_communicate",
+      "description": "与托管进程交互。action 四选一：write_stdin=向进程标准输入写文本（应答交互提示、给 REPL 送代码等）；read_stdout=从 512KB 环形缓冲读取原始输出（净化后文本，按 read_offset 增量续读，适合轮询长时间运行的进度）；send_sigint=发送中断信号（等价 Ctrl+C，程序可做优雅退出/checkpoint）；send_sigkill=强杀进程及其全部子孙进程。环形缓冲只保留最近 512KB，更早的输出用 process_tools_check 或直接读日志文件。",
+      "parameters": {
+        "properties": {
+          "process_id": {
+            "description": "进程编号 #N（支持 1、\"1\"、\"#1\" 三种写法）。"
+          },
+          "action": {
+            "description": "操作类型，write_stdin / read_stdout / send_sigint / send_sigkill 四选一。",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "description": "write_stdin 时要写入的文本；其他 action 忽略。",
+            "type": "string"
+          },
+          "append_newline": {
+            "default": true,
+            "description": "write_stdin 时自动在文本末尾补换行符（模拟回车提交），text 已以换行结尾则不重复补。",
+            "type": "boolean"
+          },
+          "read_offset": {
+            "default": 0,
+            "description": "read_stdout 的起始字节偏移（上次返回的『下一偏移』），0 表示从缓冲现存最旧处开始。",
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 8192,
+            "description": "read_stdout 单次最多返回的字节数，默认 8192，上限 65536。",
+            "type": "integer"
+          },
+          "group": {
+            "default": false,
+            "description": "send_sigint 时是否对整进程组发信号（True=连子进程一起中断，False=只中断主进程）。Windows 下 sigint 走 CTRL_BREAK，总是整组生效，此参数无差别。send_sigkill 本来就杀整棵树，忽略此参数。",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "process_id",
+          "action"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "process_tools_notice": {
+    "type": "function",
+    "function": {
+      "name": "process_tools_notice",
+      "description": "为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。对已结束进程注册会立即把当前状态作为完成通知发出。",
+      "parameters": {
+        "properties": {
+          "process_id": {
+            "description": "进程编号 #N（支持 1、\"1\"、\"#1\" 三种写法）。"
+          },
+          "interval_seconds": {
+            "default": 0,
+            "description": "周期通知间隔秒数。0（默认）=只在结束时通知；≥30 生效；1~29 视为非法。推荐 ≥900。",
+            "type": "integer"
+          },
+          "wake_agent": {
+            "default": true,
+            "description": "通知是否唤醒 agent 触发回复，默认 True。False 时只发用户可见的通知气泡。",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}

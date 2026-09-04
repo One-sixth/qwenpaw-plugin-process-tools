@@ -1,0 +1,18 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 运行数据
+process_tools_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统
+Thumbs.db
+.DS_Store

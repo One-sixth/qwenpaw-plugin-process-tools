@@ -1,0 +1,1 @@
+# 仅用 Python 标准库 + QwenPaw 内核自带依赖（agentscope/httpx），无额外安装需求
