@@ -481,10 +481,64 @@ class ProcessManager:
 
     # ── 编号与注册 ──
 
+    @staticmethod
+    def _session_token(key: Tuple[str, str, str]) -> str:
+        return sanitize_session_token("|".join(key))
+
+    def _counter_path(self, key: Tuple[str, str, str]) -> str:
+        return os.path.join(
+            get_data_dir(), "counters", f"{self._session_token(key)}.cnt",
+        )
+
     def _alloc_id(self, key: Tuple[str, str, str]) -> int:
+        """单调编号 + 落盘续号。
+
+        内存计数器在宿主重启后归零，#N 会复用重启前的旧日志文件
+        （append 混排两个进程的输出）。与磁盘历史最大号取 max 续排，
+        「编号 #N 单调分配」跨重启成立；磁盘读写失败静默降级为纯内存
+        计数——附属功能绝不阻塞 exec 主流程。
+
+        计数文件缺失时以 ``logs/`` 里本会话 token 的最大既有编号兜底
+        （0.2.1 首装盲区：计数器开始记录前，历史日志已占用的号段）。
+        """
         n = self._counters.get(key, 0) + 1
+        path = self._counter_path(key)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                disk_n = int(f.read().strip() or 0)
+            if disk_n >= n:
+                n = disk_n + 1
+        except (OSError, ValueError):
+            n = max(n, self._max_logged_num(key) + 1)
         self._counters[key] = n
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(str(n))
+            os.replace(tmp, path)
+        except OSError as e:
+            logger.debug("process-tools 编号计数器落盘失败: %s", e)
         return n
+
+    def _max_logged_num(self, key: Tuple[str, str, str]) -> int:
+        """扫 logs/ 目录中本会话 token 的最大编号（无则 0），兜底用。"""
+        prefix = f"proc_{self._session_token(key)}_"
+        log_dir = os.path.join(get_data_dir(), "logs")
+        best = 0
+        try:
+            names = os.listdir(log_dir)
+        except OSError:
+            return 0
+        for name in names:
+            if not name.startswith(prefix) or not name.endswith(".log"):
+                continue
+            digits = name[len(prefix):-4]
+            try:
+                best = max(best, int(digits))
+            except ValueError:
+                continue
+        return best
 
     def _running_count(self, key: Tuple[str, str, str]) -> int:
         return sum(
@@ -512,7 +566,7 @@ class ProcessManager:
         log_path = os.path.join(
             get_data_dir(),
             "logs",
-            f"proc_{sanitize_session_token('|'.join(key))}_{num}.log",
+            f"proc_{self._session_token(key)}_{num}.log",
         )
         mp = ManagedProcess(num, command, key, cwd, log_path)
         try:
@@ -551,22 +605,24 @@ class ProcessManager:
         logger.info("ProcessManager：已终止全部托管进程")
 
     def cleanup_old_logs(self, days: int = LOG_KEEP_DAYS) -> int:
-        """清理 N 天前的日志文件，返回删除数（startup hook 调用）。"""
-        log_dir = os.path.join(get_data_dir(), "logs")
-        if not os.path.isdir(log_dir):
-            return 0
+        """清理 N 天前的日志与编号计数器文件，返回删除数（startup hook 调用）。"""
+        data_root = os.path.join(get_data_dir(), "logs")
+        counters_dir = os.path.join(get_data_dir(), "counters")
         cutoff = time.time() - days * 86400
         removed = 0
-        for name in os.listdir(log_dir):
-            path = os.path.join(log_dir, name)
-            try:
-                if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
-                    os.remove(path)
-                    removed += 1
-            except OSError:
+        for d in (data_root, counters_dir):
+            if not os.path.isdir(d):
                 continue
+            for name in os.listdir(d):
+                path = os.path.join(d, name)
+                try:
+                    if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                        os.remove(path)
+                        removed += 1
+                except OSError:
+                    continue
         if removed:
-            logger.info("process-tools 清理旧日志 %d 个", removed)
+            logger.info("process-tools 清理旧日志/计数器 %d 个", removed)
         return removed
 
 

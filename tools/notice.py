@@ -11,7 +11,13 @@ try:
         Notice,
         get_notifier,
     )
-    from ..utils import make_error, make_success, parse_int, parse_process_id
+    from ..utils import (
+        current_channel,
+        make_error,
+        make_success,
+        parse_int,
+        parse_process_id,
+    )
 except ImportError:  # 兼容 pytest 直接以项目根导入
     from manager import get_manager
     from notifier import (
@@ -20,7 +26,13 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
         Notice,
         get_notifier,
     )
-    from utils import make_error, make_success, parse_int, parse_process_id
+    from utils import (
+        current_channel,
+        make_error,
+        make_success,
+        parse_int,
+        parse_process_id,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +76,10 @@ async def process_tools_notice(
     existing = notifier.get(key, num)
     if mp.status != "running":
         # 已结束：立即发送完成通知（幂等注册表防重复）
-        notice = existing or Notice(process_num=num, session_key=key)
+        notice = existing or Notice(
+            process_num=num, session_key=key,
+            wake_channel=current_channel(),
+        )
         if notice.completion_sent:
             return make_success(
                 f"进程 #{num} 已结束且完成通知已发送过，无需重复注册",
@@ -75,7 +90,9 @@ async def process_tools_notice(
         # 并发双调用只会投递一次；与 _send_completion 的路径语义对齐）
         notice.completion_sent = True
         text = notifier.build_completion_text(mp)
-        result = await notifier.deliver(key, text, bool(wake_agent))
+        result = await notifier.deliver(
+            key, text, bool(wake_agent), notice.wake_channel,
+        )
         return make_success(
             f"进程 #{num} 已结束（{mp.status}），完成通知已立即发出：{result}"
         )
@@ -102,6 +119,7 @@ async def process_tools_notice(
         session_key=key,
         interval_seconds=interval,
         wake_agent=bool(wake_agent),
+        wake_channel=current_channel(),
     )
     notifier.register(mp, notice)
     if notice.interval_active():

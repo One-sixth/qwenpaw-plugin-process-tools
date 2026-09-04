@@ -12,6 +12,9 @@
   2. 唤醒 agent：POST ``/api/console/chat/task`` 后台任务端点
      （复用内核 ``agents.tools.agent_management`` 官方客户端 kit，
      与 ``submit_to_agent`` 同路；会话忙碌返回 409 → 延后重试）。
+     **约束**：该端点按 (session_id, user_id, channel) 三元组**全等**
+     匹配会话、找不到就新建——payload 必须带 contextvar 真实维度，
+     且仅 console 频道投递（v0.1.2 修复写死 user_id 导致的幽灵会话）。
 
 跨 channel（非 console）会话的唤醒是 best-effort：失败时气泡与
 通知记录仍然保留，不阻塞调用方。
@@ -48,6 +51,10 @@ class Notice:
     session_key: tuple
     interval_seconds: int = 0  # 0 = 仅完成通知
     wake_agent: bool = True
+    # 注册时的频道快照（contextvar）：/chat/task 只服务 console 会话，
+    # 非 console 投递会因 (session_id,user_id,channel) 全等匹配失败而
+    # 凭空创建幽灵 chat（v0.1.2 教训），故非 console 直接跳过唤醒。
+    wake_channel: str = "console"
     completion_sent: bool = False
     exit_listener_added: bool = False  # 防重复注册叠加监听（R9）
     periodic_task: Optional[asyncio.Task] = None
@@ -128,12 +135,19 @@ class Notifier:
 
     # ── 双投递 ──
 
-    async def deliver(self, mp_key: tuple, text: str, wake_agent: bool) -> str:
+    async def deliver(
+        self,
+        mp_key: tuple,
+        text: str,
+        wake_agent: bool,
+        wake_channel: str = "console",
+    ) -> str:
         """把通知投出去，返回投递情况描述。
 
         mp_key = (agent_id, user_id, session_id)
+        wake_channel = 注册通知时快照的频道，非 console 跳过任务唤醒。
         """
-        agent_id, _user_id, session_id = mp_key
+        agent_id, user_id, session_id = mp_key
         report = []
         # 1) 通知气泡（进程内直写 console push store，用户侧可见）
         try:
@@ -146,8 +160,17 @@ class Notifier:
             report.append(f"气泡❌({type(e).__name__})")
         # 2) 唤醒 agent（同 submit_to_agent 的官方路径）
         if wake_agent:
-            ok = await self._try_wake(agent_id, session_id, text)
-            report.append("唤醒✅" if ok else "唤醒❌")
+            if wake_channel != "console":
+                # /chat/task 端点固定走 console 通道；非 console 会话
+                # 三元组匹配不上，只会凭空造出一个幽灵 chat——跳过。
+                report.append(
+                    f"唤醒⏭️(未投递:{wake_channel}频道不支持任务唤醒)",
+                )
+            else:
+                ok = await self._try_wake(
+                    agent_id, user_id, session_id, text,
+                )
+                report.append("唤醒✅" if ok else "唤醒❌")
         return " ".join(report)
 
     async def _send_completion(self, mp: "ManagedProcess", notice: Notice) -> None:
@@ -155,15 +178,20 @@ class Notifier:
             return
         notice.completion_sent = True
         text = self.build_completion_text(mp)
-        result = await self.deliver(mp.key, text, notice.wake_agent)
+        result = await self.deliver(
+            mp.key, text, notice.wake_agent, notice.wake_channel,
+        )
         logger.info("proc #%d 完成通知已投递：%s", mp.num, result)
 
-    async def _try_wake(self, agent_id: str, session_id: str, text: str) -> bool:
+    async def _try_wake(
+        self, agent_id: str, user_id: str, session_id: str, text: str,
+    ) -> bool:
         """通过本地 API 提交后台 chat task 唤醒 agent；忙则延后重试。"""
         for _attempt in range(WAKE_MAX_RETRIES):
             try:
                 submitted = await asyncio.to_thread(
-                    self._submit_wake_task, agent_id, session_id, text,
+                    self._submit_wake_task,
+                    agent_id, user_id, session_id, text,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.debug("process-tools 唤醒提交异常: %s", e)
@@ -178,8 +206,15 @@ class Notifier:
         return False
 
     @staticmethod
-    def _submit_wake_task(agent_id: str, session_id: str, text: str) -> dict:
+    def _submit_wake_task(
+        agent_id: str, user_id: str, session_id: str, text: str,
+    ) -> dict:
         """同步提交唤醒任务（放 to_thread 跑）。
+
+        user_id 必须是 contextvar 的真实用户维度：``/console/chat/task``
+        用 (session_id, user_id, channel) 三元组**全等**匹配 chat，
+        任何一维写死都会在错配时静默新建一个幽灵会话（v0.1.1 实机
+        踩坑：写死 "main" 导致通知投递到凭空创建的新 chat）。
 
         Returns:
             {"ok": True, "task_id": ...} | {"conflict": True} | {"ok": False, "error": ...}
@@ -199,7 +234,8 @@ class Notifier:
         )
         payload = {
             "session_id": session_id,
-            "user_id": "main",
+            "user_id": user_id or "default",
+            "channel": "console",
             "input": [
                 {
                     "role": "user",
@@ -236,7 +272,10 @@ class Notifier:
                     if mp.status != "running":
                         break
                     text = self.build_periodic_text(mp)
-                    await self.deliver(mp.key, text, notice.wake_agent)
+                    await self.deliver(
+                        mp.key, text, notice.wake_agent,
+                        notice.wake_channel,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001

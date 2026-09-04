@@ -1,12 +1,13 @@
 {
   "id": "qwenpaw-plugin-process-tools",
   "name": "QwenPaw 增强多进程管理插件",
-  "version": "0.1.1",
+  "version": "0.3.2",
   "type": "tool",
-  "description": "增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、stdin/stdout 交互、信号控制、完成/周期通知。进程按会话隔离，编号 #N 单调分配。",
+  "description": "增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、stdin/stdout 交互、信号控制、完成/周期通知。进程按会话隔离，编号 #N 单调分配。附前端伴生：后端活动×前端静止即自动刷新页面，唤醒回复全程直播。",
   "author": "onesixth",
   "entry": {
-    "backend": "plugin.py"
+    "backend": "plugin.py",
+    "frontend": "frontend/index.js"
   },
   "dependencies": [],
   "qwenpaw_version": {

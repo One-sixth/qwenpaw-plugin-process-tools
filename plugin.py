@@ -2,7 +2,10 @@
 """Process Tools 插件入口。
 
 注册 5 个托管多进程工具到 QwenPaw Agent 工具箱。
-架构蓝本：《AI_MED_UI 进程工具设计》（v1 = subprocess+管道，无 PTY / 无前端）。
+架构蓝本：《AI_MED_UI 进程工具设计》（v1 = subprocess+管道，无 PTY）。
+
+0.2.0 起附前端伴生组件：HTTP 轻量端点（session-fp 指纹）+ 浏览器轮询
+脚本（frontend/index.js），解决唤醒/后台任务落盘后 WebUI 不刷新的问题。
 """
 
 import asyncio
@@ -12,6 +15,7 @@ import sys
 from qwenpaw.plugins.api import PluginApi
 
 from .manager import get_manager
+from .web_api import create_router
 from .tools.exec import process_tools_exec
 from .tools.check import process_tools_check
 from .tools.list import process_tools_list
@@ -92,6 +96,11 @@ class ProcessToolsPlugin:
             tool_type="shell",
             target_param="",
             enabled=True,
+        )
+
+        # ── HTTP：会话指纹端点（前端自动刷新伴生，见 web_api.py）──
+        api.register_http_router(
+            create_router(), prefix="/process-tools", tags=["process-tools"],
         )
 
         # ── 启动钩子：清理过期日志 ──

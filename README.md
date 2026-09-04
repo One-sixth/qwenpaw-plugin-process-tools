@@ -16,11 +16,29 @@
 | `process_tools_communicate` | 与进程交互：`write_stdin` / `read_stdout`（环形缓冲增量读）/ `send_sigint` / `send_sigkill` |
 | `process_tools_notice` | 注册完成/周期通知（opt-in，通知以用户消息级别送达：气泡 + 唤醒 agent） |
 
+## 前端伴生能力（0.2.0 引入，0.3.2 三轮迭代定稿）
+
+- **及时自动刷新**：每 3s 轮询状态端点
+  `GET /api/process-tools/chat-status?chat_id=…`（后端 `running`/`idle`
+  + `last_run_at` run 身份键），并检测本页发送按钮的
+  `…actions-btn-loading-button` 态（发出消息起覆盖整个 run，含等待
+  吐字期——「页面正在展示生成」的精确 UI 信号）。
+  **后端 running ∧ 本页非 loading → 刷新**——SPA 冷启动进入运行中
+  会话原生 reconnect 接上进行中的 SSE 流，用户全程看到 agent"打字"；
+  每个 run 对本页至多一次接管刷新 + 一次落沿补看（sessionStorage run
+  级标记），**物理杜绝连环闪**；正在对话的活跃页永不被打扰。
+  输入框草稿由宿主 localStorage 自动存取，刷新不丢；只管理
+  `/chat/<UUID>` 页面。该缺口非 process-tools 独有，cron 通知、
+  跨 agent 提交同样受益。
+- 迭代史（详见 CHANGELOG）：文件指纹（太晚+误刷）→ DOM 动静
+  MutationObserver（等待吐字期误判活跃页）→ **按钮 loading × run 键**
+  终稿。
+
 ## 核心机制
 
 - **会话隔离**：进程注册表 key = `(agent_id, user_id, session_id)`，
   由 QwenPaw 内核 contextvar 注入，跨会话/跨用户不可见不可操作
-- **编号 `#N`**：按会话单调分配、永不复用；每会话并发运行上限 **5**（已结束不占名额）
+- **编号 `#N`**：按会话单调分配、永不复用（0.2.1 起计数器落盘，宿主重启后继续续号，日志文件绝不混排）；每会话并发运行上限 **5**（已结束不占名额）
 - **三路数据流（v1 两路）**：512KB 环形缓冲（`read_stdout` 回放/增量续读）+
   净化日志落盘（剥 ANSI、折叠 `\r` 覆写、增量 UTF-8），
   路径 `{workspace}/process_tools_data/logs/proc_{session}_{N}.log`
@@ -68,7 +86,9 @@ Windows 下 `cmd.exe` 不认单引号，命令里的 `>` `<` `&` `|` 等元字�
 ## 已知限制
 
 - v1 无前端 xterm 控制台（设计文档中的实时渲染层未移植）
-- 唤醒通知目前按 console 会话设计，非 console channel 为 best-effort
+- 唤醒通知按 console 会话投递：`/chat/task` 以 `(session_id, user_id, channel)`
+  三元组全等匹配会话，非 console 频道的通知会自动跳过任务唤醒（只发气泡），
+  避免误建会话
 - 环形缓冲仅 512KB，更早输出请读日志文件
 - 插件热重载/应用崩溃后的历史孤儿进程不做接管（正常退出有 shutdown 钩子兜底）
 - 不处理并发写入同一进程的 stdin（多 agent 同时写不保证顺序）

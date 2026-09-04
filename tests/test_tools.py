@@ -169,8 +169,8 @@ class _Recorder:
     def __init__(self):
         self.calls = []
 
-    async def fake(self, mp_key, text, wake_agent):
-        self.calls.append((mp_key, text, wake_agent))
+    async def fake(self, mp_key, text, wake_agent, wake_channel="console"):
+        self.calls.append((mp_key, text, wake_agent, wake_channel))
         return "记录✅"
 
 
@@ -189,7 +189,7 @@ def test_notice_completion_fires(monkeypatch):
         while time.time() < deadline and not rec.calls:
             await asyncio.sleep(0.05)
         assert rec.calls, "完成通知未发出"
-        _key, text, wake = rec.calls[0]
+        _key, text, wake, _chan = rec.calls[0]
         assert "已完成" in text and "noticed-output" in text
         assert wake is False
 
@@ -239,9 +239,9 @@ def test_notice_concurrent_double_call_delivers_once(monkeypatch):
     """S3 钉死：并发双注册已结束进程，deliver 只能执行一次
     （先查后置幂等标志，检查与置位之间不得有 await）。"""
     class SlowRec(_Recorder):
-        async def fake(self, mp_key, text, wake_agent):
+        async def fake(self, mp_key, text, wake_agent, wake_channel="console"):
             await asyncio.sleep(0.3)
-            self.calls.append((mp_key, text, wake_agent))
+            self.calls.append((mp_key, text, wake_agent, wake_channel))
             return "记录✅"
 
     rec = SlowRec()
