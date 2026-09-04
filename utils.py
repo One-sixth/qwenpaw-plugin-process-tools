@@ -61,6 +61,19 @@ def session_key(
     return (str(agent_id), str(user_id), str(session_id))
 
 
+def current_channel() -> str:
+    """读当前工具调用上下文的频道名（contextvar），取不到回落 "console"。
+
+    用于唤醒投递的频道守卫：/console/chat/task 只服务 console 会话。
+    """
+    try:
+        from qwenpaw.app.agent_context import get_current_channel
+
+        return str(get_current_channel() or "console")
+    except Exception:  # noqa: BLE001
+        return "console"
+
+
 def sanitize_session_token(text: str) -> str:
     """把会话标识压成可作文件名的短标记（非字母数字→_，截断+crc32 防冲突）。
 

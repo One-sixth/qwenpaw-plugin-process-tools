@@ -6,7 +6,7 @@
 
 ## 架构决策
 
-### v1 范围拍板（2026-09-05 与泰斗先生确认）
+### v1 范围拍板（2026-09-05 与作者确认）
 - **subprocess + 管道，不做 PTY**：看重跨平台（Win/macOS/Linux 三大系统正常用），`pywinpty` 不引入
 - **不做前端 xterm 控制台**：只做 agent 侧 5 工具 + 日志文件
 - **工具命名全部 `process_tools_XXX`**，5 个：exec / list / check / communicate / notice
@@ -80,15 +80,17 @@ conftest 要逐个模块 setattr 覆盖。
 
 ---
 
-## 待实机验证清单（装进 QwenPaw 后）
+## 实机验证清单（装进 QwenPaw 后——已全部核销，0.3.2 装机验收收官）
 
-- [ ] 宿主事件循环是否 Proactor（Windows 下 `create_subprocess` 的前提；
-      plugin.register 已埋检测日志，非 Proactor 会在工具返回中报错）
-- [ ] 工具调用里 `get_current_session_id()` 返回真实会话（非 "default"）
-- [ ] 通知气泡在 WebUI 弹出（console channel 会话）
-- [ ] `/console/chat/task` 唤醒闭环：会话空闲立即回复、忙碌排队/重试
-- [ ] 多 agent 并发时会话隔离实际生效
-- [ ] 治理审批链路：`tool_type="shell"` 下 exec 的命令送 detector 不误杀
+- [x] 宿主事件循环是 Proactor ✅（0.1.x 冒烟实锤；`plugin.register`
+      已埋检测日志，非 Proactor 会在工具返回中报错）
+- [x] 工具调用里 `get_current_session_id()` 返回真实会话 ✅（冒烟实锤）
+- [x] 通知气泡在 WebUI 弹出 ✅（冒烟 + 0.3.2 装机验收双实锤）
+- [x] `/console/chat/task` 唤醒闭环 ✅（0.1.2 端到端测试 ghost=0；
+      0.3.2 实机：气泡→唤醒→1 刷接逐字直播）
+- [x] 会话隔离实际生效 ✅（71 测试双向 + 冒烟 list 隔离；多 agent
+      **真机并发**未测，归入远期观察）
+- [x] 治理审批链路 `tool_type="shell"` detector 不误杀 ✅（冒烟实锤）
 
 ---
 
@@ -167,17 +169,170 @@ shell detector 无误杀 ✅。仍待专测：/chat/task 唤醒闭环、多 agen
 
 ---
 
+## 唤醒闭环专测轮（2026-09-05 续场，实测定雷 → v0.1.2）
+
+### 前置核销（全绿）
+- 装机 0.1.1 = 仓库零漂移（29 文件 hash 全同）；测试须用
+  `D:\Software\miniconda3\envs\qwenpaw\python.exe`（normal 环境无 agentscope，跑不了）
+- **sigint 复查** ✅：exit=3221225786(0xC000013A) → 状态 `killed`；本机宿主有控制台
+- **多 agent 隔离** ✅：spawn_subagent（session=sub-e47ed726）双向不可见
+  对方进程、编号各自从 #1 排、日志文件名带各自会话 token
+
+### 大雷：唤醒投递到幽灵会话（用户实锤发现）
+- 现象：notice 注册的完成通知没回本会话，WebUI 冒出全新 chat
+  「【后台进程通知】以下」(a09715b1)
+- chats.json 取证：两 chat 的 session_id **相同**（`1788551250567-g9t2380`），
+  差异只在 **user_id：本会话 `default` vs 幽灵 `main`**
+- 根因链：`/console/chat/task` → `resolve_session_id` 原样采纳显式
+  session_id → `get_or_create_chat(session_id, user_id, channel)` 三元组
+  **全等**匹配（repo/base.py get_chat_by_id），查不到**静默新建**；
+  而 notifier `_submit_wake_task` 把 user_id 写死 `"main"`（照抄示例），
+  真实值明明就在 mp_key 第二位却被 `_user_id` 丢弃
+- 教训：**投递寻址的每个维度都必须用 contextvar 真实值，写死=造鬼**；
+  内核 get_or_create 类接口是「查不到就新建」语义，不会报错救你
+
+### v0.1.2 修复
+- payload `user_id` 透传 mp_key 真实值（空回落 "default"）+ 显式 `channel`
+- **频道守卫**：Notice 新增 `wake_channel`（注册时 `utils.current_channel()`
+  快照 contextvar），非 console 跳过任务唤醒只发气泡（回显「唤醒⏭️」），
+  堵住跨频道投递的第二条造鬼路径
+- 测试 54 → 60 passed + 1 skip（新增 test_notifier_wake.py 6 项钉死）
+
+### 复测方法（装机后）
+后台 exec → notice(wake_agent=True) → 结束回合等进程完成 →
+**应在原会话**收到唤醒（agent 自动复活汇报）；chats.json 不再长新 chat。
+
+### HTTP 层预验证（2026-09-05 本会话，curl/urllib 手工投修正 payload）
+- 忙时投 → **409** "already running for this chat"（证明三元组命中当前 chat）
+- 空闲投（sleep 25s 后）→ **200** + task_id，agent 在**原会话**被唤醒，
+  判别标记 WAKE-OK-2026 读到并复述 ✅
+- 结论：修正 payload（真实 user_id="default"）寻址正确；插件通路复测
+  仍待 commit → --force 重装 0.1.2
+
+---
+
+## 前端伴生·自动刷新（0.2.0，2026-09-05 作者拍板）
+
+**问题**：唤醒闭环后端通了，但 QwenPaw 前端主对话气泡区**同一会话内永不
+自动重拉**（SessionLoader 仅切会话触发；2.2.0 bundle 实测无 chat-reload
+事件、reconnect 字样为 0），agent 被唤醒回复完，用户页面零动静。
+
+**方案拍板**（用户决策）：整页 reload 而非小插件——
+- 输入框草稿**不用守卫**：宿主本来就把草稿存 localStorage，刷新自动恢复
+- 生成期零感知、打断阅读位置：接受（fp 只在生成完成落盘时变，天然无半截态）
+- **不建独立通用插件**，并进 process-tools（HTTP 端点 + 零构建前端脚本）
+
+**实现要点**：
+- `web_api.py`：`GET /api/process-tools/session-fp?chat_id=` → 遍历
+  workspace 的 chats.json（mtime+size 缓存）定位 `(session_id,user_id,
+  channel)` → **只 stat** session 文件返回 `mtime_ns:size`。绝不读会话
+  正文（本会话文件已 420KB+，3s 全量拉取是灾难）
+- session 文件名**复用内核** `app.chats.session.session_filename()`：
+  `{safe_uid}_{safe_sid}.json`（非法字符→`--`；uid==sid 省段），
+  路径 `sessions/<safe_channel>/…`，兜底旧布局无 channel 子目录
+- `frontend/index.js` 零构建纯 JS（**无 JSX/组件就不需要 vite**；
+  参考 session-tools：type=command 带 entry.frontend 可行）；
+  **基线机制**防误刷：进页/切 chat 只记 fp 不 reload；同会话 fp 非空
+  变化才 reload；`__qptLiveRefreshInstalled` 防 SPA 重复装载
+- ⚠️ **前端调 API 三件套**（session-tools 血泪直拷）：原生 fetch +
+  `host.getApiUrl()` + Bearer `getApiToken()` + `X-Agent-Id`；
+  **不能用 host.fetch**——它内部再拼 /api 变成 /api/api/ 404
+- 测试 60 → 69（test_web_api.py 9 项；兜底分支用
+  `sys.modules["qwenpaw.config"]=None` 逼 ImportError，比 patch
+  builtins.__import__ 干净）
+
+---
+
+## 端到端大考与编号复用 bug（0.2.1，2026-09-05）
+
+- **0.2.0 装机后端到端全绿**：33 文件零漂移；session-fp 端点宿主直调
+  200（真实 chat UUID）、404/跨 workspace 遍历 OK、前端 bundle 经
+  `/api/plugins/{id}/files/frontend/index.js` 下发、plugins list
+  `loaded:true`；真 notice 唤醒**回本会话**（ghost 恒 0，
+  0.1.2 插件通路收官）
+- **顺带抓到实锤**：唤醒通知的"输出末尾"带着上一轮 sigint 实验的
+  `^C^C`——宿主重启后 `_counters`（纯内存）归零，新 #1 撞重启前 #1 的
+  日志文件名，`open(path, "a")` 混排两个进程输出。工具描述承诺
+  「编号单调分配、永不复用」，跨重启不成立
+- **0.2.1 修复**：`_alloc_id` 落盘续号（`counters/{token}.cnt`，
+  读盘取 max+1、原子写 tmp→replace；读写失败静默降级内存计数，
+  附属不阻塞 exec）；cleanup_old_logs 同清 logs+counters；
+  token 抽 `_session_token()` 供日志名/计数器名共用防漂移
+- 测试 69 → 73 passed + 1 skip
+
+---
+
+## 及时刷新三轮迭代（0.2.0→0.3.2 定稿，2026-09-05 用户实测驱动）
+
+需求（作者原话）：「后端会话在活跃、前端在不动，就刷新」。
+三轮判据演化，每轮都被实测定律——**记录为过程资产，防未来走回头路**：
+
+| 轮 | 判据 | 死因（用户实测） |
+|---|---|---|
+| 0.2.0 | session 文件指纹变化（`session-fp`） | 落盘=生成**完整结束**，刷新太晚；正常轮次落盘还误刷活跃页 |
+| 0.3.0~0.3.1 | 后端 running × MutationObserver DOM 静止 | **等待吐字期**界面明明显示"正在生成"但 DOM 无字符 → 活跃页照刷、连环闪 |
+| **0.3.2** | 后端 running × **发送按钮 loading 态** × **run 身份键** | （现行，✅ 装机验收通过：仅 1 刷接直播） |
+
+**0.3.2 终稿三要素**：
+1. **后端活动**：`GET /api/process-tools/chat-status?chat_id=` → 转发
+   `task_tracker.get_status(chat.id)`（**run_key 就是 chat.id**，console.py
+   attach_or_start 决定；纯内存 O(1)）+ `run_at`=
+   `get_global_status().last_run_at`（workspace 级，同一 run 稳定）。
+   异常兜底 `unknown`（前端按非活动处理，宁可不刷）。
+2. **前端知情判据（关键突破，CloakBrowser 实测取证）**：chat 库发送按钮
+   class `qwenpaw-sender-actions-btn-loading-button`——实测生命周期
+   `disabled(空闲)→clean(待发)→loading(覆盖整个 run 含思考空窗)→disabled`；
+   全局稳定前缀非 hash。**running ∧ 本页非 loading = 页面不知情** → 该刷。
+3. **run 身份键去重（最后一道闸）**：sessionStorage 三标记
+   `qptReloadRun`(接管一刷)/`qptBusyRun`(本页见过 loading=直播中)/
+   `qptFallbackRun`(落沿补看一刷，仅当刷过但从没见过 loading 即
+   reconnect 疑似失败)——**任一 run 对同一页至多两刷**；run_at 缺失退回
+   30s 时间桶；最小 reload 间隔 15s；切 chat 清空三标记；只认
+   `/chat/<UUID>` URL；visibilitychange 回前台立即 tick。
+
+刷新后的直播原理（upstream 原生，源码实证）：SPA 冷启动进入 running
+会话 → `getSession`→`getChat`→`isGenerating(status==='running')`→SDK
+`reconnect()`（POST /console/chat {reconnect:true}，tracker buffer 回放
++ 续流；`patchLastUserMessage` 专治 user 消息未落盘空窗）。
+输入框草稿宿主本来存 localStorage，reload 无损。
+
+**教训（两轮各半对，合成完整版）**：
+① 判「该不该刷新」别用远端代理猜（文件落盘=结果、打点=来源），直接量
+需求里的原始变量；② 但**量的必须是被控对象的语义状态而非行为代理**——
+"前端动不动"用 DOM 变化频率数仍是猜，组件自己渲染的 loading 态才是
+第一手信号；③ **刷新次数上限（身份键去重）是独立于判据的最后一道闸**，
+判据可以错，风暴不能放。
+
+相关退役面：fp/chats.json 索引/session_filename 复用/wake 打点表
+（notifier 干净）、MutationObserver。0.2.1 编号落盘续号保留 +
+0.3.2 并首装盲区修复（`_max_logged_num()` 扫 logs 兜底）。
+测试 71 passed + 1 skip。
+
+---
+
 ## 现状快照与会话交接（截至 2026-09-05 本开发会话）
 
-- **版本**：v0.1.1，插件名「QwenPaw 增强多进程管理插件」，
-  description「增强 QwenPaw 的多进程管理和交流能力」
-- **git**：0.1.0 基线已 commit；**0.1.1（审查修复+sigint 映射+更名）尚未 commit**（规则：由泰斗先生提交）
-- **测试**：54 passed + 1 skip（skip=无控制台环境的 Windows sigint 实链路专测，设计如此）
-- **安装状态**：宿主装的是 0.1.0，**--force 重装才拿到 0.1.1 修复与新名字**
+- **版本**：v0.3.2（及时刷新定稿：chat-status×发送按钮 loading×run
+  身份键 + 编号续号兜底），插件名「QwenPaw 增强多进程管理插件」
+- **git**：✅ 全部已 commit（作者 2026-09-05 提交 5 笔：
+  `6d96a44`=0.1.2 唤醒寻址、`322f10c`=0.2.0 指纹+前端首版、
+  `cbd7feb`=0.2.1/0.3.0草案 wake 打点+计数器、`b9ffadb`=0.3.0 chat-status、
+  `32902bf`=0.3.2 run 键定稿；MEMORY 收尾修订留工作区）
+- **测试**：71 passed + 1 skip；跑测试用 `envs\qwenpaw\python.exe`
+- **安装状态**：✅ 宿主已跑 0.3.2（探针响应带 `run_at` 实锤；装机目录
+  与仓库逐文件哈希一致，仅 MEMORY.md 文档差异）。45s notice 唤醒场景
+  实测通过；日志同 token 续号 #1→#3 正常。cmd 彩蛋：`cmd /c` 整行在
+  **解析期一次性展开** `%TIME%`，`&&` 串多段 echo 时间戳同刻——非插件
+  bug，写多段命令/排障时留意（要逐段实时值得用 `!TIME!` 延迟展开或拆调用）。
+  ④跨重启续号留待下次宿主重启顺带核：同 token 应发 max(logs)+1（本
+  token 现至 #3）。探针备查：处理中 `curl .../api/process-tools/chat-status?chat_id=<本chatUUID>`
+  回 `{"status":"running","run_at":<epoch>}`，响应带 run_at=0.3.2 已加载。
+- **遗留物**：无（幽灵会话与 main_ session 文件已被用户清理）
 
 ### 下一会话待办（按优先级）
-1. commit 0.1.1 → 实机 `--force` 重装 → 冒烟复查（重点：Windows sigint 现在报 killed 而非 failed）
-2. **唤醒闭环专测**（带控制台宿主）：notice 注册后台进程 → 空闲时会话应被 /chat/task 自动唤起并回复；忙碌时排队重试路径
-3. **多 agent 隔离验证**：两个 agent 同开进程，互相 list 不到
-4. **Linux/macOS 实机**：本套件全在 Windows 跑绿；POSIX 分支（start_new_session/killpg/SIGINT 优雅语义）未经真实宿主验证，值得上云跑一轮 pytest
-5. 远期可选：PTY 双后端（pywinpty/pty.fork）保真进度条、前端 xterm 控制台标签、周期通知 token 消耗实测
+1. **Linux/macOS 实机**：POSIX 分支（start_new_session/killpg/SIGINT 优雅
+   语义）未经真实宿主验证，值得上云跑一轮 pytest
+2. 远期可选：PTY 双后端、上游提 `qwenpaw:chat-reload` 软刷新需求
+   （届时把 reload 升级无痕）、周期通知 token 实测、气泡 60s 过期错过的
+   补偿、run_at 是 workspace 级——同 agent 多 chat 并发时键会漂（现状
+   影响：可能提前放行下一次刷新许可，有两刷上限+15s 间隔垫底，暂不处理）

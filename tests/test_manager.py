@@ -358,3 +358,97 @@ def test_windows_sigint_yields_killed_not_failed():
         assert mp.status == STATUS_KILLED
 
     run(main())
+
+
+# ── 编号落盘续号（0.2.1：重启后 #N 不复用旧日志文件） ──
+
+
+def test_alloc_id_persists_across_restart(tmp_dir):
+    """模拟宿主重启：内存计数器清零后应从磁盘续号，日志文件名不撞。"""
+    import manager as manager_mod
+
+    key = ("test-agent", "test-user", "test-session")
+    m = manager_mod.get_manager()
+    assert m._alloc_id(key) == 1
+    assert m._alloc_id(key) == 2
+    manager_mod.reset_manager()  # 模拟重启：新实例内存为空
+    m2 = manager_mod.get_manager()
+    n3 = m2._alloc_id(key)
+    assert n3 == 3, "重启后编号必须续排，否则 append 复用旧日志文件"
+    # 日志路径与编号一致性（撞号事故的场景回归）
+    assert m2._counter_path(key).endswith(".cnt")
+
+
+def test_alloc_id_backfills_from_existing_logs(tmp_dir):
+    """0.2.1 首装盲区：计数文件没有，但 logs/ 已有历史号段——必须兜底。"""
+    import manager as manager_mod
+
+    key = ("test-agent", "test-user", "test-session")
+    token = manager_mod.ProcessManager._session_token(key)
+    log_dir = os.path.join(manager_mod.get_data_dir(), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    for stale in (1, 2, 3):
+        with open(os.path.join(
+            log_dir, f"proc_{token}_{stale}.log",
+        ), "w", encoding="utf-8") as f:
+            f.write("legacy")
+    # 干扰项：别的会话 token 与非法编号文件名不参与兜底
+    with open(os.path.join(log_dir, "proc_zzzz_99.log"), "w") as f:
+        f.write("other session")
+    with open(os.path.join(log_dir, f"proc_{token}_x.log"), "w") as f:
+        f.write("bad digits")
+    m = manager_mod.get_manager()  # 计数文件不存在（首装场景）
+    assert m._alloc_id(key) == 4, "必须跳过 logs 里已占用的 1~3"
+    assert m._alloc_id(key) == 5
+
+
+def test_alloc_id_isolated_per_session(tmp_dir):
+    """不同会话 key 各有计数器，互不影响。"""
+    import manager as manager_mod
+
+    key_a = ("ag", "u1", "s1")
+    key_b = ("ag", "u1", "s2")
+    m = manager_mod.get_manager()
+    assert m._alloc_id(key_a) == 1
+    assert m._alloc_id(key_b) == 1
+    assert m._alloc_id(key_a) == 2
+
+
+def test_alloc_id_survives_disk_failure(tmp_dir, monkeypatch):
+    """计数器目录不可写 → 静默降级纯内存计数，alloc 不抛错。"""
+    import manager as manager_mod
+
+    blocker = os.path.join(tmp_dir, "not_a_dir")
+    with open(blocker, "w", encoding="utf-8") as f:
+        f.write("x")
+    monkeypatch.setattr(
+        manager_mod, "get_data_dir",
+        lambda: os.path.join(blocker, "sub"),  # 父路径是文件 → makedirs 必炸
+    )
+    m = manager_mod.get_manager()
+    key = ("ag", "u", "s")
+    assert m._alloc_id(key) == 1
+    assert m._alloc_id(key) == 2  # 磁盘失败，内存仍单调
+
+
+def test_cleanup_removes_old_counters(tmp_dir):
+    """过期清理同时覆盖 logs 与 counters 两目录。"""
+    import manager as manager_mod
+
+    m = manager_mod.get_manager()
+    root = manager_mod.get_data_dir()
+    old_cnt = os.path.join(root, "counters", "old.cnt")
+    new_cnt = os.path.join(root, "counters", "new.cnt")
+    old_log = os.path.join(root, "logs", "old.log")
+    new_log = os.path.join(root, "logs", "new.log")
+    for p in (old_cnt, new_cnt, old_log, new_log):
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("1")
+    past = time.time() - 40 * 86400
+    os.utime(old_cnt, (past, past))
+    os.utime(old_log, (past, past))
+    removed = m.cleanup_old_logs(days=30)
+    assert removed == 2
+    assert not os.path.exists(old_cnt) and not os.path.exists(old_log)
+    assert os.path.exists(new_cnt) and os.path.exists(new_log)
