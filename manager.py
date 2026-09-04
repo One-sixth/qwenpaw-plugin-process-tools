@@ -64,6 +64,26 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_KILLED = "killed"
 
+# Windows 实测（2026-09-05 实机冒烟）：CTRL_BREAK 走控制台默认处置程序，
+# 子进程的 SIGINT/SIGBREAK handler 根本不会被调用，进程以
+# STATUS_CONTROL_C_EXIT (0xC000013A) 被 OS 终止。这是"被中断杀死"，
+# 不是"任务失败"——必须映射为 killed，否则 agent 会误判。
+WIN_STATUS_CONTROL_C_EXIT = 0xC000013A
+# 同一状态的有符号 32 位形态（returncode 可能以负数出现）
+WIN_STATUS_CONTROL_C_EXIT_SIGNED = WIN_STATUS_CONTROL_C_EXIT - 2**32  # -1073741510
+
+
+def status_for_exit(exit_code, killed_by_us: bool) -> str:
+    """退出码 → 进程状态映射（纯函数，便于钉死测试）。"""
+    if killed_by_us:
+        return STATUS_KILLED
+    # returncode 在不同路径可能以有符号/无符号 32 位出现，双形态都认
+    if exit_code in (WIN_STATUS_CONTROL_C_EXIT, WIN_STATUS_CONTROL_C_EXIT_SIGNED):
+        return STATUS_KILLED
+    if exit_code == 0:
+        return STATUS_COMPLETED
+    return STATUS_FAILED
+
 
 class ManagedProcess:
     """一个被托管的子进程。"""
@@ -204,12 +224,7 @@ class ManagedProcess:
             self._close_log()
 
         self.finished_at = time.time()
-        if self._killed_by_us:
-            self.status = STATUS_KILLED
-        elif self.exit_code == 0:
-            self.status = STATUS_COMPLETED
-        else:
-            self.status = STATUS_FAILED
+        self.status = status_for_exit(self.exit_code, self._killed_by_us)
 
         if self._exit_future is not None and not self._exit_future.done():
             self._exit_future.set_result(self.exit_code)
@@ -301,7 +316,9 @@ class ManagedProcess:
                 os.kill(pid, _ctrl_break_event())
                 return (
                     f"已向进程组 {pid} 发送 CTRL_BREAK"
-                    "（Windows 无法只中断主进程，整组生效）"
+                    "（Windows 实测：不经 CPython 信号机制，"
+                    "handler 不会执行，进程以 0xC000013A 被 OS 终止，"
+                    "≈ 略轻于 sigkill 的第二档硬杀；优雅退出请走 stdin 指令）"
                 )
         except ProcessLookupError:
             return "目标进程已不存在（可能刚刚退出）"
@@ -426,7 +443,8 @@ class ManagedProcess:
         code = "" if self.exit_code is None else f" exit={self.exit_code}"
         cmd = self.command.replace("\n", " ")
         if len(cmd) > 80:
-            cmd = cmd[:80] + "…"
+            # 统一用 <<truncated>> 截断风格（实机冒烟观感反馈）
+            cmd = cmd[:80] + "<<truncated>>"
         return (
             f"#{self.num} [{state}{code}] {mins // 60:02d}:"
             f"{mins % 60:02d}:{secs:02d} $ {cmd}"

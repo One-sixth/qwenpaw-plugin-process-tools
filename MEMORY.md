@@ -137,3 +137,47 @@ conftest 要逐个模块 setattr 覆盖。
 ### 教训沉淀（已进知识库《编程技巧速查》§10）
 **幂等标记必须与检查处在同一同步段（await 之前），否则 check-then-act 并发双投递**；
 测试全绿 ≠ 世界正确：孤儿路径要用「失败注入 + 进程存活性外证」（taskkill 基线计数）钉。
+
+---
+
+## 实机联调轮（2026-09-05，另一会话冒烟 + 本次修复）
+
+### 冒烟结果：8/8 能力通过，0 残留
+前台 exec / 后台 #N / list 隔离与计数 / check 尾部 / read_stdout 增量续读 /
+write_stdin 中文往返 / notice 立即补发气泡 / sigkill 杀树 + 前台超时自杀——全 ✅。
+核销「待实机验证清单」：Proactor 循环 ✅、contextvar 真会话 ✅、气泡 ✅、
+shell detector 无误杀 ✅。仍待专测：/chat/task 唤醒闭环、多 agent 并发隔离。
+
+### 核心发现（v0.1.1 修复）：Windows sigint ≠ 优雅中断
+- 实锤：带自定义 SIGINT handler 的进程与裸进程**都**以 `0xC000013A`
+  (STATUS_CONTROL_C_EXIT) 被 OS 直接终止——CTRL_BREAK 走控制台默认处置程序，
+  轮不到 CPython 信号机制，连 KeyboardInterrupt traceback 都没有
+- 修复：`status_for_exit()` 纯函数把该码（有符号 -1073741510 / 无符号双形态）
+  映射为 `killed`（此前误报 failed 会让 agent 误判任务出错）；
+  docstring/回显/README 全部诚实化：Windows sigint ≈ 略轻于 sigkill 的第二档硬杀，
+  **优雅退出走 write_stdin 约定指令**
+- **连带发现（测试环境专测钉死）**：`GenerateConsoleCtrlEvent` 要求目标进程组
+  attach 在当前控制台——**无控制台宿主**（服务化/管道化运行 QwenPaw）里
+  CTRL_BREAK 无处送达，sigint 静默无效（工具返回"发送信号失败"文案）。
+  实链路测试对此双环境自适应 skip，不伪装通过
+
+### 其他小修
+- 截断风格统一 `<<truncated>>`（list 摘要此前用 `…`）
+- 版本 0.1.1；测试 54 passed + 1 skip（skip 项为无控制台环境的 Windows 专测）
+
+---
+
+## 现状快照与会话交接（截至 2026-09-05 本开发会话）
+
+- **版本**：v0.1.1，插件名「QwenPaw 增强多进程管理插件」，
+  description「增强 QwenPaw 的多进程管理和交流能力」
+- **git**：0.1.0 基线已 commit；**0.1.1（审查修复+sigint 映射+更名）尚未 commit**（规则：由泰斗先生提交）
+- **测试**：54 passed + 1 skip（skip=无控制台环境的 Windows sigint 实链路专测，设计如此）
+- **安装状态**：宿主装的是 0.1.0，**--force 重装才拿到 0.1.1 修复与新名字**
+
+### 下一会话待办（按优先级）
+1. commit 0.1.1 → 实机 `--force` 重装 → 冒烟复查（重点：Windows sigint 现在报 killed 而非 failed）
+2. **唤醒闭环专测**（带控制台宿主）：notice 注册后台进程 → 空闲时会话应被 /chat/task 自动唤起并回复；忙碌时排队重试路径
+3. **多 agent 隔离验证**：两个 agent 同开进程，互相 list 不到
+4. **Linux/macOS 实机**：本套件全在 Windows 跑绿；POSIX 分支（start_new_session/killpg/SIGINT 优雅语义）未经真实宿主验证，值得上云跑一轮 pytest
+5. 远期可选：PTY 双后端（pywinpty/pty.fork）保真进度条、前端 xterm 控制台标签、周期通知 token 消耗实测

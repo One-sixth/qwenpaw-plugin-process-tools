@@ -1,6 +1,6 @@
-# Process Tools — QwenPaw 多进程管理插件
+# Process Tools — QwenPaw 增强多进程管理插件
 
-**补充 QwenPaw 的托管多进程能力：后台进程启动、状态查看、stdin/stdout 交互、信号控制、完成/周期通知。**
+**增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、stdin/stdout 交互、信号控制、完成/周期通知。**
 
 蓝本：《AI_MED_UI 进程工具设计》（v1 = subprocess + 管道，无 PTY、无前端控制台），
 核心思想是 **"进程是共享对象"**：agent 工具里的 `#N` 与日志文件指向同一个进程，
@@ -49,8 +49,11 @@ qwenpaw app
 
 | 平台 | spawn | sigint | sigkill |
 |------|-------|--------|---------|
-| Linux / macOS | `/bin/sh -c` + `start_new_session` | SIGINT 主进程 / killpg 整组 | SIGKILL 整组 |
-| Windows | `cmd.exe /c` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK（**总是整组生效**，无法只中断主进程） | `taskkill /F /T` 杀树 |
+| Linux / macOS | `/bin/sh -c` + `start_new_session` | SIGINT 主进程 / killpg 整组，**程序可捕获做优雅退出** | SIGKILL 整组 |
+| Windows | `cmd.exe /c` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK：⚠️ 实测**不经 CPython 信号机制**，自定义 handler 不会执行，进程以 `0xC000013A` 被 OS 终止（映射为 `killed` 状态），≈ 略轻于 sigkill 的第二档硬杀 | `taskkill /F /T` 杀树 |
+
+> **Windows 想优雅退出**：用 `write_stdin` 发送约定指令（如 REPL 的 `exit()`、
+> 或程序自定义的 quit 命令），不要指望 sigint。
 
 ⚠️ **无 TTY**：进度条/TUI 程序按普通管道输出（一般会自行降级）；
 Windows 下 `cmd.exe` 不认单引号，命令里的 `>` `<` `&` `|` 等元字符需自行按目标 shell 规则转义。
