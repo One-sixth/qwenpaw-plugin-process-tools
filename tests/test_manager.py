@@ -12,6 +12,7 @@ from manager import (
     MAX_RUNNING_PER_SESSION,
     RING_LIMIT,
     STATUS_COMPLETED,
+    STATUS_FAILED,
     STATUS_KILLED,
     STATUS_RUNNING,
     get_manager,
@@ -307,5 +308,53 @@ def test_spawn_never_runs_when_log_setup_fails(monkeypatch):
             raised = True  # manager.start 统一包 RuntimeError（含编号消耗提示）
         assert raised, "log 目录失败应当抛 RuntimeError"
         assert calls == [], "spawn 不允许被调用——先建日志后 spawn 的顺序钉死"
+
+    run(main())
+
+
+def test_status_for_exit_maps_control_c():
+    """实机冒烟反馈钉死：Windows CTRL_BREAK 的 0xC000013A 必须是 killed，
+    不能谎报 failed 让 agent 误判任务出错。"""
+    from manager import status_for_exit
+
+    # 无符号 / 有符号 32 位双形态
+    assert status_for_exit(0xC000013A, False) == STATUS_KILLED
+    assert status_for_exit(-1073741510, False) == STATUS_KILLED
+    # 常规路径不变
+    assert status_for_exit(0, False) == STATUS_COMPLETED
+    assert status_for_exit(1, False) == STATUS_FAILED
+    assert status_for_exit(1, True) == STATUS_KILLED
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sigint 语义专测")
+def test_windows_sigint_yields_killed_not_failed():
+    """带自定义 SIGINT handler 的进程在 Windows 被 CTRL_BREAK 后，
+    实链路必须收敛到 status=killed（handler 不执行、OS 直接终止）。
+
+    注意：GenerateConsoleCtrlEvent 要求目标进程组 attach 在当前控制台上；
+    无控制台的宿主（如管道化测试运行器）里 CTRL_BREAK 无处送达，
+    signal_interrupt 返回失败文案或进程根本不退出——这两种情况 skip，
+    不在无控制台环境伪装验证通过。
+    """
+    async def main():
+        code = (
+            "import signal,time;"
+            "f=lambda *a: print('graceful',flush=True);"
+            "[signal.signal(getattr(signal,n),f)"
+            " for n in ('SIGINT','SIGBREAK') if hasattr(signal,n)];"
+            "[time.sleep(0.2) for _ in range(300)]"
+        )
+        m = get_manager()
+        mp = await m.start(py_cmd(code))
+        await asyncio.sleep(1.0)
+        note = mp.signal_interrupt(group=False)
+        if "失败" in note:
+            await mp.kill()
+            pytest.skip(f"环境无控制台可送达 CTRL_BREAK：{note}")
+        rc = await mp.wait(timeout=30)
+        if rc is None:
+            await mp.kill()
+            pytest.skip("CTRL_BREAK 未送达（宿主无控制台），进程仍在跑")
+        assert mp.status == STATUS_KILLED
 
     run(main())

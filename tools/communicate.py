@@ -37,7 +37,7 @@ async def process_tools_communicate(
     max_bytes: int = 8192,
     group: bool = False,
 ):
-    """与托管进程交互。action 四选一：write_stdin=向进程标准输入写文本（应答交互提示、给 REPL 送代码等）；read_stdout=从 512KB 环形缓冲读取原始输出（净化后文本，按 read_offset 增量续读，适合轮询长时间运行的进度）；send_sigint=发送中断信号（等价 Ctrl+C，程序可做优雅退出/checkpoint）；send_sigkill=强杀进程及其全部子孙进程。环形缓冲只保留最近 512KB，更早的输出用 process_tools_check 或直接读日志文件。
+    """与托管进程交互。action 四选一：write_stdin=向进程标准输入写文本（应答交互提示、给 REPL 送代码等）；read_stdout=从 512KB 环形缓冲读取原始输出（净化后文本，按 read_offset 增量续读，适合轮询长时间运行的进度）；send_sigint=发送中断信号（POSIX 下程序可捕获做优雅退出/checkpoint；**Windows 实测 handler 不会执行**，进程被 OS 以 0xC000013A 直接终止，相当于略轻于 sigkill 的第二档硬杀，优雅退出请改用 stdin 指令约定）；send_sigkill=强杀进程及其全部子孙进程。环形缓冲只保留最近 512KB，更早的输出用 process_tools_check 或直接读日志文件。
 
     Args:
         process_id: 进程编号 #N（支持 1、"1"、"#1" 三种写法）。

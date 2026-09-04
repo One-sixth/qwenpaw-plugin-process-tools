@@ -2,6 +2,23 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.1.1] - 2026-09-05
+
+实机冒烟（另一会话）8/8 通过，修复其发现的 Windows sigint 语义坑。
+
+### Fixed
+- **Windows `send_sigint` 语义实锤修正**：CTRL_BREAK 不经 CPython 信号机制，
+  自定义 handler 不会执行，进程以 `0xC000013A`（STATUS_CONTROL_C_EXIT）被 OS 终止。
+  该退出码（有符号/无符号双形态）现映射为 `killed` 状态而非 `failed`，
+  避免 agent 误判任务出错；新增纯函数 `status_for_exit` + 单测 + Windows 实链路测试
+- 截断风格统一：`list` 的命令摘要从 `…` 改为 `<<truncated>>`（与其余工具一致）
+
+### Changed
+- 插件更名「QwenPaw 增强多进程管理插件」，description 强调
+  "增强 QwenPaw 的多进程管理和交流能力"（plugin.json / README / AGENTS 同步）
+- communicate docstring / 信号回显 / README 跨平台表：明示
+  "Windows sigint ≈ 第二档硬杀，优雅退出走 stdin 指令约定"；POSIX 优雅语义保留
+
 ## [0.1.0] - 2026-09-05
 
 首个版本。蓝本《AI_MED_UI 进程工具设计》v1 移植：subprocess + 管道，跨平台，无前端。
