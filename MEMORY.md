@@ -445,6 +445,40 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
 - 「让 process_tools 操作 OS 里任意 PID 的进程」（attach/taskkill 系统进程、
   按 PID 查询等）——作者 2026-09-05 评审 W4 时提出，**先搁置**。
 
+### 0.4.0 实链路核收轮（2026-09-05 续场，装机 0.4.0 零漂移后逐条打钩）
+
+- **T1 detach ✅ 完整闭环**：bash 显式选择报错引导不静默换壳 ✅；返回 OS PID
+  不进注册表不占号 ✅；pwsh 包装 + CREATE_NO_WINDOW 下真实干活（文件落地、
+  到期自灭），DETACHED_PROCESS 罢工坑未复发 ✅。坏 cwd 报 WinError 267
+  统一 OSError 捕获 ✅。
+- **T2 no_shell ✅ + 新坑一条**：python 直启 `> & | <` 字面传参 ✅、
+  JSON 字符串 argv 通道防御 ✅。**但 no_shell 目标选 cmd.exe 时元字符仍被
+  cmd 自身重解析**（"此时不应有 &"，exit 1）——no_shell 免疫的是壳包装层，
+  治不了 cmd 的命令行再解析天性；文档卖点表述要限定「避开 shell 劫持」。
+- **T3 encoding 全链路 ✅**：auto 检测报 `gbk`（GetConsoleOutputCP）；
+  cmd 原生 GBK 中文错误文案正确解码；python 子进程继承 PYTHONUTF8=1 输出
+  UTF-8 → auto 下乱码属**设计内混码现实**，回显自带自纠提示，实测
+  `encoding="utf-8"` 显式切换立即恢复 ✅。
+- **T4 wait ✅**：`"[1]"` JSON 串解析 ✅；混合批量（已结束+运行中）超时
+  error 点名运行中、汇报已结束、**不杀进程**（幸存靶自然跑完 exit 0）✅；
+  已结束幂等即返 ✅。
+- **T5 编号/惯例**：counters/ 落盘就位（新会话从 #1 起为正常语义）；
+  env 增量语义（PT_TEST 注入 + SystemRoot 保留）✅；name 标签四处渲染 ✅；
+  PATH 前置宿主 python 目录在 no_shell 直启下验证成功。
+  **pwsh 包装时 PATH 头会变 `$PSHOME`**（PowerShell 7 启动子进程时自己插的，
+  无害——PS 目录无 python.exe，解析顺序不受影响）。
+- **🐛 定雷：轮次内 notice 已结束进程 = 唤醒秒失败零信息**。foreground 轮次
+  中调 notice(已结束#N) → 「气泡✅ 唤醒❌」立即返回。外部探针复现同三元组
+  POST 得 409 "already running"（本会话 run 正持有着），按代码应走 conflict
+  30s 重试而非秒败——说明内部真实响应 ≠ 409，死因被 `_try_wake` 吞在
+  debug 日志零呈现。**头号嫌疑：宿主自己 POST 自己端点被同 chat 的 run 锁
+  卡到 httpx 15s 超时 → 异常路径秒 False**。已落 0.4.1 埋点（reason 进
+  报告 + logger.warning + 3 测试钉，116 passed + 4 skip），待重装重启后
+  复跑 notice(#N) 一次定谳。
+- **版本与装机**：0.4.0 已由作者 commit（`f410c74`）并 `--force` 装机，
+  核收时全文件 hash 零漂移；0.4.1 埋点改动在工作区未 commit（规则：commit
+  由作者决定），装机核收需重启宿主（会杀本会话宿主进程，由作者择机）。
+
 ### 现状快照与会话交接（截至 2026-09-05 0.4.0 开发会话）
 
 - **版本**：v0.4.0——**6 工具**（+process_tools_wait）；exec **七参数**

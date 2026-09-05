@@ -67,7 +67,7 @@ async def process_tools_exec(
         hide_window: Windows 下隐藏子进程的控制台窗口（CREATE_NO_WINDOW），跑不该弹窗的脚本时用；POSIX 忽略，与 detach=True 无叠加意义。
         detach: True 时启动完全不受本插件控制的脱离进程：立即返回 OS 级 PID（不是 #N 编号），无 stdin/stdout/stderr 管道（输出丢弃，需要就自己在 command 里重定向）、无超时、不进注册表（list/check/communicate/notice 都看不到它）、宿主退出不被清理、不占并发名额。之后管理需用系统命令按 PID 自理（Windows taskkill /F /T /PID、POSIX kill；注意 PID 是 shell 进程，杀整树要 /T）。background/timeout/max_output_chars/encoding 参数失效。
         encoding: 管道编解码 codec（输出解码与 stdin 编码共用）。auto（默认）=本机原生编码（Windows 取控制台码页，中文系统即 GBK，返回信息会写明实际值）；输出乱码或 stdin 中文失配时显式指定（如 utf-8 / gbk / cp437），未知 codec 会报错。
-        no_shell: True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。
+        no_shell: True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。注意直启目标本身就是 cmd/sh 类解释器时，它会再解析自己的命令行，元字符免疫只对 argv 传参的真程序（python/git 等）有效。
         shell: 命令解释器：default（推荐——Windows 优先 pwsh、POSIX 优先 bash，未安装自动回落 cmd/sh）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。
     """
     # ── 参数规范化 ──

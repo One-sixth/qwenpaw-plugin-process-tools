@@ -92,7 +92,7 @@ def test_deliver_wake_routing_and_channel_guard(monkeypatch):
 
     async def fake_wake(self, agent_id, user_id, session_id, text):
         woken.append((agent_id, user_id, session_id))
-        return True
+        return True, ""
 
     monkeypatch.setattr(cps, "append", fake_append)
     monkeypatch.setattr(Notifier, "_try_wake", fake_wake)
@@ -115,6 +115,56 @@ def test_deliver_wake_routing_and_channel_guard(monkeypatch):
     r = run(nt.deliver(key, "正文3", False, wake_channel="console"))
     assert "唤醒" not in r
     assert len(woken) == 1
+
+
+def test_deliver_surfaces_wake_failure_reason(monkeypatch):
+    """0.4.0 实链路发现裸「唤醒❌」无法定位死因——reason 必须进报告。"""
+    pytest.importorskip("qwenpaw.app.console_push_store")
+
+    async def fake_append(session_id, text, *, sticky=False):
+        return None
+
+    async def fake_wake_fail(self, agent_id, user_id, session_id, text):
+        return False, "RuntimeError: 连接被拒绝"
+
+    monkeypatch.setattr(
+        "qwenpaw.app.console_push_store.append", fake_append,
+    )
+    monkeypatch.setattr(Notifier, "_try_wake", fake_wake_fail)
+
+    nt = Notifier()
+    r = run(nt.deliver(("a", "u", "s"), "正文", True, wake_channel="console"))
+    assert "唤醒❌(RuntimeError: 连接被拒绝)" in r
+    assert "气泡✅" in r
+
+
+def test_try_wake_exception_reason_tuple(monkeypatch):
+    """_try_wake 异常路径：返回 (False, 类型: 消息) 而非裸 False。"""
+    nt = Notifier()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("模拟挂掉")
+
+    monkeypatch.setattr(nt, "_submit_wake_task", boom)
+    ok, reason = run(nt._try_wake("a", "u", "s", "正文"))
+    assert ok is False
+    assert "RuntimeError" in reason and "模拟挂掉" in reason
+
+
+def test_try_wake_error_passthrough(monkeypatch):
+    """非 409 错误响应：error 文本原样进 reason，且不重试不睡眠。"""
+    nt = Notifier()
+    calls = []
+
+    def fake_submit(*args, **kwargs):
+        calls.append(1)
+        return {"ok": False, "error": "404: 端点不存在"}
+
+    monkeypatch.setattr(nt, "_submit_wake_task", fake_submit)
+    ok, reason = run(nt._try_wake("a", "u", "s", "正文"))
+    assert ok is False
+    assert reason == "404: 端点不存在"
+    assert len(calls) == 1, "非冲突错误不应触发重试"
 
 
 # ── 3) notice 工具接线：频道快照贯穿注册与立即投递 ──

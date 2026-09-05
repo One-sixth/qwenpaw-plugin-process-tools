@@ -2,6 +2,22 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.4.1] - 2026-09-05
+
+0.4.0 实链路核收发现：foreground 轮次内对已结束进程 `notice`，完成通知
+的唤醒投递**秒回「唤醒❌」**且无任何原因细节（错误文本被 `_try_wake`
+吞在 debug 日志里），无法区分「会话忙/端点异常/自锁超时」。本版把死因
+surface 到工具报告。
+
+### Changed
+- **唤醒失败原因进报告**：`Notifier._try_wake` 返回值 `bool` →
+  `(ok, reason)`；`deliver` 报告由 `唤醒❌` 变为
+  `唤醒❌(RuntimeError: timed out)` / `唤醒❌(404: ...)` /
+  `唤醒❌(会话忙，重试 20 次(约 10 分钟)后仍未成功)` 等具体死因，
+  并同步打 `logger.warning`。非冲突错误不重试不睡眠的行为不变。
+- 测试 113 → **116 passed + 4 skipped**（`test_notifier_wake.py` +3：
+  报告含 reason、异常路径元组、错误透传且不重试）。
+
 ## [0.4.0] - 2026-09-05
 
 exec 参数扩展：从「只有 command/background/timeout/cwd/max_output_chars」
