@@ -15,7 +15,7 @@
 | `process_tools_check` | 查进程状态、退出码、运行时长、输出日志尾部与路径 |
 | `process_tools_wait` | 前台主动等待一个/一批后台进程结束（all 语义；超时只报「仍运行中」不杀进程） |
 | `process_tools_communicate` | 与进程交互：`write_stdin` / `read_stdout`（环形缓冲增量读）/ `send_sigint` / `send_sigkill` |
-| `process_tools_notice` | 注册完成/周期通知（opt-in，通知以用户消息级别送达：气泡 + 唤醒 agent） |
+| `process_tools_notice` | 注册完成/周期通知（opt-in，通知以用户消息级别送达：气泡 + 唤醒 agent）。只面向未来事件——仅运行中进程可注册，已结束返回错误（结果用 `check` 拿） |
 
 ## 前端伴生能力（0.2.0 引入，0.3.2 三轮迭代定稿）
 
@@ -45,7 +45,7 @@
   路径 `{workspace}/process_tools_data/logs/proc_{session}_{N}.log`
 - **通知系统**：完成通知幂等；周期通知间隔 ≥30s（推荐 ≥900s，省 token）；
   投递 = `console_push_store` 通知气泡 +（可选）`/chat/task` 后台任务唤醒 agent，
-  会话忙碌自动延后重试
+  会话忙碌自动排队、空闲后送达（重试 20×30s 上限，超时会过期）
 - **信号语义**：`send_sigint` 默认只中断主进程（`group=True` 整组）；
   `send_sigkill` 连子孙进程杀干净；前台等待被取消时尽力 kill，**绝不留孤儿**；
   应用退出钩子统一终止全部托管进程
@@ -107,6 +107,8 @@ Windows 下 `cmd.exe` 不认单引号，命令里的 `>` `<` `&` `|` 等元字�
 - 唤醒通知按 console 会话投递：`/chat/task` 以 `(session_id, user_id, channel)`
   三元组全等匹配会话，非 console 频道的通知会自动跳过任务唤醒（只发气泡），
   避免误建会话
+- 唤醒排队有上限（20 次 × 30s ≈ 10 分钟）：agent 连续繁忙超时则通知过期，
+  气泡仍在——及时 `check`/`wait` 兜底
 - 环形缓冲仅 512KB，更早输出请读日志文件
 - 插件热重载/应用崩溃后的历史孤儿进程不做接管（正常退出有 shutdown 钩子兜底）
 - 不处理并发写入同一进程的 stdin（多 agent 同时写不保证顺序）
