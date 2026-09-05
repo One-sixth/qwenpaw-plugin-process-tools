@@ -98,6 +98,9 @@ conftest 要逐个模块 setattr 覆盖。
 
 - 数据根：`{workspace}/process_tools_data/logs/proc_{sanitize_session_token}_{N}.log`
 - startup hook 清理 30 天前日志（`cleanup_old_logs(days=30)`）
+- startup hook 另跑**死会话数据清理**（`cleanup_stale_sessions()`，v0.4.3：
+  条目∧文件双判据，死会话 cnt/logs 即删；方法与防误杀三闸见「0.4.3 轮」
+  及知识库《编程技巧速查》§21）
 - shutdown hook `shutdown_all()` 终止全部运行中托管进程（防孤儿）
 
 ---
@@ -539,27 +542,28 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
 
 ---
 
-### 现状快照与会话交接（2026-09-05 notice 收口轮之后）
+### 收尾存档（v0.4.3 收官，2026-09-05 项目收工）
 
 - **版本**：v0.4.3——6 工具；exec 七参数；0.4.1=唤醒失败 reason 埋点、
   0.4.2=notice 语义收口（已结束→error 引导 check；异步到期投递不变、
   忙排队空闲送达）、0.4.3=死会话数据清理（双判据即删 cnt+日志）。
   **notice=未来事件 / check=当下与过去 / wait=未完成**
   的时态三分定稿（作者拍板+纠偏）。
-- **git**：0.4.1=`8fff884`、0.4.2=`67ac269`、0.4.2 文档=`5f99e29` 均已由
-  作者 commit；**0.4.3 改动在工作区待 commit**（utils/manager/plugin +
-  新测试 + 文档四件套）。
+- **git**：0.4.1=`8fff884`、0.4.2=`67ac269`、0.4.2 文档=`5f99e29`、
+  **0.4.3=`9ef0b84` 均已由作者 commit**，工作树干净。
 - **测试**：**128 passed + 4 skip**（skip 全为平台守卫）；跑测试用
   `envs\qwenpaw\python.exe`；notifier_wake 的 Proactor `__del__`
   ResourceWarning 为存量（基线同样存在）。
-- **装机状态**：装机仍为 0.4.2（0.4.2 曾 `--force` 重装+重启核销：实链路
-  两验通过——已结束 notice 秒 error 引导 check、繁忙期结束唤醒排队迟到
-  送达；跨重启续号双实证 #9、#10/#11）；**0.4.3 待重装+重启**后死会话
-  清理生效（实环境干跑已预验判决：仅清 1 cnt + 10 log，全为死会话/垃圾）。
-- **遗留待办**：① Linux/macOS 实机 POSIX 分支（bash 默认壳路径，云端
-  实测优先级↑）；② 唤醒重试 10 分钟上限（20×30s）是否放宽——连续繁忙
-  超 10 分钟通知会过期，等真实场景反馈；③ 远期：PTY 双后端、
-  `qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期
-  补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置组；
-  ④ 小改进候选（新会话做）：notice docstring「忙碌自动排队」可注明
-  10 分钟上限、wait 批量全结束时 error/success 边界文案再打磨。
+- **装机状态**：✅ **0.4.3 已重装+重启并核销**——实删与干跑预期逐字节
+  一致（清 1 cnt + 10 log：无主 default、UI 删除会话 bu2tuw8×7、幽灵 main
+  化石；4 活会话 4 cnt + 30 log 零误伤），本会话 exec 冒烟 #1 正常、新
+  token 正确落号；0.4.2 时代的实链路两验与跨重启续号双实证（#9、#10/#11）
+  维持在册。
+- **收官声明**：v0.4.3 全项验收——128+4 测试、实链路清单全核销、装机
+  实测死会话清理判决=干跑逐字节一致零误伤、工作树干净。项目正式收工。
+- **观察项（冻结，作者点名才激活）**：① Linux/macOS 实机 POSIX 分支
+  （云端跑一遍 pytest 即可补）；② 唤醒重试 20×30s（约 10 分钟）上限
+  是否放宽，等真实场景反馈；③ 远期组：PTY 双后端、`qwenpaw:chat-reload`
+  上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级
+  键漂移、「按 OS PID 操作任意进程」搁置、文案小候选 ×2（notice
+  docstring 注 10 分钟排队上限、wait 批量全结束的边界文案）。
