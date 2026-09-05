@@ -50,10 +50,16 @@
   防误杀新建会话，chats.json 不可读则整个工作区跳过；另有 30 天龄兜底清理
 - **通知系统**：完成通知幂等；周期通知间隔 ≥30s（推荐 ≥900s，省 token）；
   投递 = `console_push_store` 通知气泡 +（可选）`/chat/task` 后台任务唤醒 agent，
-  会话忙碌自动排队、空闲后送达（重试 20×30s 上限，超时会过期）
+  会话忙碌自动排队、空闲后送达（重试 20×30s 上限，超时会过期）。
+  notice 只面向未来事件——**极短进程**（如 `sleep 5`）exec 返回时往往已结束、
+  注册必失败，直接用 `wait` 收口即可，无需挂通知
 - **信号语义**：`send_sigint` 默认只中断主进程（`group=True` 整组）；
   `send_sigkill` 连子孙进程杀干净；前台等待被取消时尽力 kill，**绝不留孤儿**；
-  应用退出钩子统一终止全部托管进程
+  应用退出钩子统一终止全部托管进程。
+  ⚠️ 已知行为：进程退出状态回收以**输出完整为先**——若被托管进程派生了
+  继承 stdout 管道的后台孙进程（如 `os.system("sleep 100 &")`），即使主进程
+  已退出，状态仍显示 running，直到孙进程也结束（管道 EOF）才回收终态；
+  sigkill 走 killpg 整组，随后记录的退出码是主进程的真实码
 - **超时自解释**：前台超时返回"输出末尾 20 行 + 加大 timeout / background=True 建议 + 完整日志路径"
 - **`env` 增量环境变量**：在 `os.environ` 之上叠加、只对本进程生效（subprocess 的
   env 是全量替换语义，代码里先并入宿主环境再覆盖）；兼容 dict 与 JSON 字符串（通道
@@ -85,6 +91,10 @@ qwenpaw app
 
 > 无任何外部 pip 依赖（纯标准库 + QwenPaw 自带 agentscope）。
 > 安装后工具默认启用，无需额外配置。
+>
+> ⚠️ `qwenpaw plugin install <URL>` 仅支持 **zip 归档**，直接给 GitHub 仓库
+> URL 会报 `File is not a zip file`（QwenPaw 安装器行为）。Git 仓库需先
+> `git clone` 到本地再按本地路径安装。
 
 ## 跨平台说明
 
