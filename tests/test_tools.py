@@ -196,7 +196,11 @@ def test_notice_completion_fires(monkeypatch):
     run(main())
 
 
-def test_notice_on_finished_sends_immediately(monkeypatch):
+def test_notice_on_finished_returns_error_directing_to_check(monkeypatch):
+    """2026-09-05 作者拍板新设计：notice 只面向未来事件——已结束进程
+    返回错误并引导 check（等待语义对已知终态多此一举）。旧「立即投递」
+    路径存在前台 run 占会话导致唤醒 20 连 409 自锁 10 分钟的空转缺陷，
+    已废除。"""
     rec = _Recorder()
     monkeypatch.setattr(notifier_mod.Notifier, "deliver", rec.fake)
 
@@ -205,11 +209,10 @@ def test_notice_on_finished_sends_immediately(monkeypatch):
         mp = get_manager().get(1)
         assert await mp.wait(timeout=60) == 0
         c = await process_tools_notice(1)
-        assert not is_error(c) and "立即发出" in chunk_text(c)
-        assert len(rec.calls) == 1
-        c2 = await process_tools_notice(1)
-        assert not is_error(c2) and "重复" in chunk_text(c2)
-        assert len(rec.calls) == 1
+        assert is_error(c)
+        text = chunk_text(c)
+        assert "已结束" in text and "process_tools_check" in text
+        assert rec.calls == [], "已结束进程不得再触发任何投递"
 
     run(main())
 
@@ -235,9 +238,10 @@ def test_notice_unknown_process():
 # ── 审查钉死：并发幂等 / 坏 cwd ──
 
 
-def test_notice_concurrent_double_call_delivers_once(monkeypatch):
-    """S3 钉死：并发双注册已结束进程，deliver 只能执行一次
-    （先查后置幂等标志，检查与置位之间不得有 await）。"""
+def test_send_completion_concurrent_double_delivers_once(monkeypatch):
+    """S3 钉死（新落点）：exit 路径 _send_completion 并发双调，deliver
+    只能执行一次（检查+置位同一同步段，中间不得有 await）。
+    旧落点「notice 立即投递」已随 0.4.2 设计废除。"""
     class SlowRec(_Recorder):
         async def fake(self, mp_key, text, wake_agent, wake_channel="console"):
             await asyncio.sleep(0.3)
@@ -251,14 +255,14 @@ def test_notice_concurrent_double_call_delivers_once(monkeypatch):
         await process_tools_exec(py_cmd("print('dup')"), background=True)
         mp = get_manager().get(1)
         assert await mp.wait(timeout=60) == 0
-        c1, c2 = await asyncio.gather(
-            process_tools_notice(1), process_tools_notice(1),
+        nt = notifier_mod.Notifier()
+        notice = notifier_mod.Notice(process_num=1, session_key=mp.key)
+        await asyncio.gather(
+            nt._send_completion(mp, notice),
+            nt._send_completion(mp, notice),
         )
         assert len(rec.calls) == 1, "并发下投递了不止一次"
-        texts = [chunk_text(c1), chunk_text(c2)]
-        immediate = [t for t in texts if "立即发出" in t]
-        dup = [t for t in texts if "重复" in t]
-        assert len(immediate) == 1 and len(dup) == 1
+        assert notice.completion_sent is True
 
     run(main())
 

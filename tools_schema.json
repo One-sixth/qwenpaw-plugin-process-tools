@@ -196,7 +196,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_notice",
-      "description": "为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。对已结束进程注册会立即把当前状态作为完成通知发出。",
+      "description": "为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队（agent 回合进行中会等其空闲后再投递）。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。只能给运行中的进程注册；对已结束进程注册会返回错误（结果请用 process_tools_check 获取）。",
       "parameters": {
         "properties": {
           "process_id": {
