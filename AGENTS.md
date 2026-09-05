@@ -8,7 +8,7 @@ QwenPaw 增强多进程管理插件。注册 6 个 Agent 工具，提供托管�
 
 | 文件 | 用途 |
 |------|------|
-| `plugin.py` | 插件入口，注册 6 个工具 + HTTP 端点 + 启动清理/退出杀进程钩子 |
+| `plugin.py` | 插件入口，注册 6 个工具 + HTTP 端点 + 启动清理（30 天龄 + 死会话数据）/退出杀进程钩子 |
 | `utils.py` | 公共函数：ToolChunk 封装、contextvar 会话定位、parse_int/env/argv/ids、encoding 解析、shell 枚举解析、日志尾读 |
 | `sanitizer.py` | 输出净化：ANSI 剥离、CRLF 归一、`\r` 覆写折叠、增量解码（codec 可配，默认 utf-8） |
 | `manager.py` | ProcessManager 注册表 + ManagedProcess 内核（环形缓冲/守护等待/杀树） |
