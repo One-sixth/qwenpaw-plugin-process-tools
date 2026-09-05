@@ -2,6 +2,8 @@
 
 **增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、stdin/stdout 交互、信号控制、完成/周期通知。**
 
+GitHub仓库：https://github.com/One-sixth/qwenpaw-plugin-process-tools
+
 蓝本：《AI_MED_UI 进程工具设计》（v1 = subprocess + 管道，无 PTY、无前端控制台），
 核心思想是 **"进程是共享对象"**：agent 工具里的 `#N` 与日志文件指向同一个进程，
 会话内人机同一视图。
