@@ -559,10 +559,32 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
   化石；4 活会话 4 cnt + 30 log 零误伤），本会话 exec 冒烟 #1 正常、新
   token 正确落号；0.4.2 时代的实链路两验与跨重启续号双实证（#9、#10/#11）
   维持在册。
+- **Linux 实机核销（2026-09-05，Debian 12 / Python 3.11.2 / QwenPaw
+  2.2.0）**：v0.4.3 经 agent 实机工具调用全量冒烟 **37/37 全绿**，
+  无功能性缺陷，结论「可以交付使用」。POSIX 关键语义实证：SIGINT
+  **可捕获**（C5 handler 完整执行 exit=42 / C6 group=True 送达，
+  与 Windows 0xC000013A 硬杀成镜像对照）、bash -c 包装、env 增量叠加、
+  detach/no_shell/并发上限/notice 三态全部符合设计。报告 5.1 三项
+  观察复核裁决=**全部符合设计，零代码改动**：
+  ① 短进程 notice 报错=「notice 只面向未来事件」既定设计，极短进程
+  用 wait 收口（README 已补指引）；
+  ② 并行 wait「#22 返回 completed 而非超时」非缺陷——每次调用的
+  timeout_s 是局部变量直达 `asyncio.wait`，天然各算各的；#22 是
+  T16 的 sleep 60，demo 时早已结束，走的是幂等终态分支（测试者
+  无法复现与代码分析互证）；
+  ③ SIGINT handler sys.exit(99) 后状态卡 running 的根因=**孙进程握
+  stdout 管道**：`os.system("sleep 100 &")` 的 sleep 继承管道写端，
+  `_monitor` 顺序是先 await reader 拉干管道（EOF）再取退出码置状态
+  ——输出完整性优先的有意权衡；sigkill 走 killpg 连孙一起杀后管道
+  关闭，回收真实退出码 99（killed exit=99 细节全对上）。已写入
+  README 信号语义「已知行为」。同轮 README 补安装节「URL 仅支持
+  zip 归档，Git 仓库需 clone 本地安装」（QwenPaw 安装器行为，
+  非插件缺陷）。
 - **收官声明**：v0.4.3 全项验收——128+4 测试、实链路清单全核销、装机
   实测死会话清理判决=干跑逐字节一致零误伤、工作树干净。项目正式收工。
-- **观察项（冻结，作者点名才激活）**：① Linux/macOS 实机 POSIX 分支
-  （云端跑一遍 pytest 即可补）；② 唤醒重试 20×30s（约 10 分钟）上限
+- **观察项（冻结，作者点名才激活）**：① macOS 实机 POSIX 分支
+  （**Linux 半边已 2026-09-05 实机核销 37/37**，见上节；macOS 与
+  Linux 走同一 POSIX 代码路径，残余风险低）；② 唤醒重试 20×30s（约 10 分钟）上限
   是否放宽，等真实场景反馈；③ 远期组：PTY 双后端、`qwenpaw:chat-reload`
   上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级
   键漂移、「按 OS PID 操作任意进程」搁置、文案小候选 ×2（notice
