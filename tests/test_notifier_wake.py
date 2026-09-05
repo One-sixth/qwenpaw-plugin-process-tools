@@ -167,7 +167,7 @@ def test_try_wake_error_passthrough(monkeypatch):
     assert len(calls) == 1, "非冲突错误不应触发重试"
 
 
-# ── 3) notice 工具接线：频道快照贯穿注册与立即投递 ──
+# ── 3) notice 工具接线：频道快照贯穿注册；已结束进程改报错引导 wait ──
 
 
 def test_notice_snapshots_channel_for_running_process(monkeypatch):
@@ -190,7 +190,9 @@ def test_notice_snapshots_channel_for_running_process(monkeypatch):
     run(main())
 
 
-def test_notice_immediate_path_passes_channel_to_deliver(monkeypatch):
+def test_notice_immediate_path_retired_no_delivery(monkeypatch):
+    """0.4.2 设计：已结束进程 notice → error，不投递任何东西
+    （旧立即投递路径会撞前台 run 的会话忙自锁，唤醒 10 分钟空转）。"""
     import tools.notice as notice_tool
 
     calls = []
@@ -208,8 +210,8 @@ def test_notice_immediate_path_passes_channel_to_deliver(monkeypatch):
         mp = get_manager().get(1)
         assert await mp.wait(timeout=60) == 0
         c = await process_tools_notice(1)
-        assert not is_error(c) and "立即发出" in chunk_text(c)
-        assert calls == ["telegram"], "已结束进程的立即投递也要带频道守卫"
+        assert is_error(c) and "check" in chunk_text(c)
+        assert calls == [], "已结束进程不得触发投递"
 
     run(main())
 

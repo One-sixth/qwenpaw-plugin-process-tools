@@ -42,7 +42,7 @@ async def process_tools_notice(
     interval_seconds: int = 0,
     wake_agent: bool = True,
 ):
-    """为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。对已结束进程注册会立即把当前状态作为完成通知发出。
+    """为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队（agent 回合进行中会等其空闲后再投递）。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。只能给运行中的进程注册；对已结束进程注册会返回错误（结果请用 process_tools_check 获取）。
 
     Args:
         process_id: 进程编号 #N（支持 1、"1"、"#1" 三种写法）。
@@ -75,26 +75,14 @@ async def process_tools_notice(
     key = mp.key
     existing = notifier.get(key, num)
     if mp.status != "running":
-        # 已结束：立即发送完成通知（幂等注册表防重复）
-        notice = existing or Notice(
-            process_num=num, session_key=key,
-            wake_channel=current_channel(),
-        )
-        if notice.completion_sent:
-            return make_success(
-                f"进程 #{num} 已结束且完成通知已发送过，无需重复注册",
-            )
-        if not existing:
-            notifier.set_notice(key, notice)
-        # S3 修复：先置幂等标记再 await 投递（检查+置位在同一同步段完成，
-        # 并发双调用只会投递一次；与 _send_completion 的路径语义对齐）
-        notice.completion_sent = True
-        text = notifier.build_completion_text(mp)
-        result = await notifier.deliver(
-            key, text, bool(wake_agent), notice.wake_channel,
-        )
-        return make_success(
-            f"进程 #{num} 已结束（{mp.status}），完成通知已立即发出：{result}"
+        # 已结束进程不再立即投递：投递唤醒必然撞上当前前台 run 的
+        # 「会话忙」自锁（notice 同步等重试 → 自己的 run 占着会话 →
+        # 20 次全 409 → 10 分钟空转后失败）。结果获取归 check 管。
+        label = f"#{num}「{mp.name}」" if mp.name else f"#{num}"
+        return make_error(
+            "注册通知",
+            f"进程 {label} 已结束（{mp.status} exit={mp.exit_code}），无事件可等",
+            "用 process_tools_check(process_id) 看状态/用时/输出尾部",
         )
 
     if existing:
