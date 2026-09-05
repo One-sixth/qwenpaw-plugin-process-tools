@@ -463,13 +463,16 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
   双调仅一投。
 - **落地**：`tools/notice.py` 立即投递块删除+docstring 更新、3 测试原地
   改写（116 passed + 4 skip 不变）、schema 重导出、CHANGELOG 0.4.2、
-  plugin.json 0.4.1→0.4.2。**未 commit**（作者决定）。
+  plugin.json 0.4.1→0.4.2。**已由作者 commit（`8fff884`+`67ac269`）**。
 - **装机核销顺带**：宿主重启后编号 **#9 续起**——「跨重启续号」待办 ✅
   核销；重装 0.4.1 后全文件 hash 与仓库零漂移。
-- **待办**：作者 commit+`--force` 重装+重启后，实链路两验：
-  ① `notice`(已结束#N) 应秒回 error 且引导 check；② `notice`(运行中，
-  数秒后结束)+继续忙本回合 → 回合结束后气泡+唤醒消息应迟到送达
-  （验证异步排队路径在真实繁忙下走通）。
+- **装机核销（2026-09-05 同日完成，作者重装 0.4.2 + 重启，零漂移）**：
+  ① `notice`(已结束#10) → **秒回 error 引导 check**，10 分钟自锁消灭 ✅
+  （check 对终态进程返回终态+用时+输出尾+日志路径，引导语指对 ✅）；
+  ② `notice`(运行中#11) 注册后进程于前台回合繁忙期结束 → 气泡即时 +
+  唤醒 conflict 排队 → **回合结束 ≤30s 迟到送达并成功唤醒**（唤醒消息
+  即「【后台进程通知】」独立回合实证）——「忙排队→空闲送达」全链走通 ✅。
+  跨重启续号第二证：#10/#11 从盘上计数续起。
 
 ### 0.4.0 实链路核收轮（2026-09-05 续场，装机 0.4.0 零漂移后逐条打钩）
 
@@ -507,19 +510,24 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
   核收时全文件 hash 零漂移；0.4.1 埋点改动在工作区未 commit（规则：commit
   由作者决定），装机核收需重启宿主（会杀本会话宿主进程，由作者择机）。
 
-### 现状快照与会话交接（截至 2026-09-05 0.4.0 开发会话）
+### 现状快照与会话交接（2026-09-05 notice 收口轮之后）
 
-- **版本**：v0.4.0——**6 工具**（+process_tools_wait）；exec **七参数**
-  （env/name/hide_window/detach/encoding/no_shell/shell）+ 框架 PATH 惯例
-  对齐；0.3.2 的及时刷新定稿内容全部保留
-- **git**：⚠️ 0.4.0 改动在工作区**未 commit**（规则：commit 由作者决定）
-- **测试**：**113 passed + 4 skip**（test_exec_params 36 + test_wait 10；
-  skip 全为平台守卫）；跑测试用 `envs\qwenpaw\python.exe`；notifier_wake 的
-  Proactor `__del__` ResourceWarning 为存量问题（基线 HEAD 同样存在）
-- **装机状态**：⏳ 宿主还在跑 0.3.2，0.4.0 待 commit 后 `--force` 重装核收
-  （重点：detach+pwsh 包装实链路、wait 唤醒场景共存、agent 通道传 argv/
-  id 列表的 JSON 串防御、默认壳切 pwsh 后 agent 写命令的体感）
-- **0.3.2 遗留待办不变**：① Linux/macOS 实机 POSIX 分支（本轮新增 bash
-  默认壳路径，云端实测优先级↑）；② 远期：PTY 双后端、`qwenpaw:chat-reload`
-  上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级
-  键漂移；③ 跨重启续号下次宿主重启顺带核
+- **版本**：v0.4.2——6 工具；exec 七参数；0.4.1=唤醒失败 reason 埋点、
+  0.4.2=notice 语义收口（已结束→error 引导 check；异步到期投递不变、
+  忙排队空闲送达）。**notice=未来事件 / check=当下与过去 / wait=未完成**
+  的时态三分定稿（作者拍板+纠偏）。
+- **git**：0.4.1=`8fff884`、0.4.2=`67ac269` 均已由作者 commit；本会话
+  后续文档对齐（AGENTS/README/本文件）留工作区。
+- **测试**：**116 passed + 4 skip**（skip 全为平台守卫）；跑测试用
+  `envs\qwenpaw\python.exe`；notifier_wake 的 Proactor `__del__`
+  ResourceWarning 为存量（基线同样存在）。
+- **装机状态**：✅ 0.4.2 已 `--force` 重装+重启，仓库零漂移；实链路两验
+  核销（已结束 notice 秒 error、繁忙期结束唤醒排队迟到送达）；跨重启
+  续号双实证（#9、#10/#11）。
+- **遗留待办**：① Linux/macOS 实机 POSIX 分支（bash 默认壳路径，云端
+  实测优先级↑）；② 唤醒重试 10 分钟上限（20×30s）是否放宽——连续繁忙
+  超 10 分钟通知会过期，等真实场景反馈；③ 远期：PTY 双后端、
+  `qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期
+  补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置组；
+  ④ 小改进候选（新会话做）：notice docstring「忙碌自动排队」可注明
+  10 分钟上限、wait 批量全结束时 error/success 边界文案再打磨。
