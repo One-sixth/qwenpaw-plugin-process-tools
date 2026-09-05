@@ -66,7 +66,7 @@
           },
           "no_shell": {
             "default": false,
-            "description": "True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。",
+            "description": "True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。注意直启目标本身就是 cmd/sh 类解释器时，它会再解析自己的命令行，元字符免疫只对 argv 传参的真程序（python/git 等）有效。",
             "type": "boolean"
           },
           "shell": {

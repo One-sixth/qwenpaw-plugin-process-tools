@@ -169,10 +169,16 @@ class Notifier:
                     f"唤醒⏭️(未投递:{wake_channel}频道不支持任务唤醒)",
                 )
             else:
-                ok = await self._try_wake(
+                ok, reason = await self._try_wake(
                     agent_id, user_id, session_id, text,
                 )
-                report.append("唤醒✅" if ok else "唤醒❌")
+                if ok:
+                    report.append("唤醒✅")
+                else:
+                    logger.warning(
+                        "process-tools 唤醒投递失败: %s", reason,
+                    )
+                    report.append(f"唤醒❌({reason})")
         return " ".join(report)
 
     async def _send_completion(self, mp: "ManagedProcess", notice: Notice) -> None:
@@ -187,8 +193,14 @@ class Notifier:
 
     async def _try_wake(
         self, agent_id: str, user_id: str, session_id: str, text: str,
-    ) -> bool:
-        """通过本地 API 提交后台 chat task 唤醒 agent；忙则延后重试。"""
+    ) -> tuple:
+        """通过本地 API 提交后台 chat task 唤醒 agent；忙则延后重试。
+
+        Returns:
+            (ok, reason)：失败时 reason 为具体死因（异常类型/响应错误/
+            重试耗尽），成功时为 ""。忙(409)不算死因，只算等待。
+        """
+        reason = ""
         for _attempt in range(WAKE_MAX_RETRIES):
             try:
                 submitted = await asyncio.to_thread(
@@ -197,15 +209,16 @@ class Notifier:
                 )
             except Exception as e:  # noqa: BLE001
                 logger.debug("process-tools 唤醒提交异常: %s", e)
-                return False
+                return False, f"{type(e).__name__}: {e}"
             if submitted.get("ok"):
-                return True
+                return True, ""
             if submitted.get("conflict"):
                 # 会话正忙：延后重试（设计文档「忙碌时排队」的近似实现）
+                reason = f"会话忙，重试 {WAKE_MAX_RETRIES} 次(约 10 分钟)后仍未成功"
                 await asyncio.sleep(WAKE_RETRY_SECONDS)
                 continue
-            return False
-        return False
+            return False, str(submitted.get("error") or "未知失败")
+        return False, reason
 
     @staticmethod
     def _submit_wake_task(
