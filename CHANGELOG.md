@@ -2,6 +2,26 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.4.3] - 2026-09-05
+
+死会话数据清理：会话没了，它的计数器与日志跟着走。
+
+### Added
+- **`ProcessManager.cleanup_stale_sessions()`**（startup hook 自动调用）：
+  遍历 `workspaces/` 下全部 agent 工作区，对「会话判活双判据」——
+  chats.json 索引条目 **且** 真实会话文件（`sessions/<channel>/<uid>_<sid>.json`，
+  兼容旧版根目录布局）——任一已没的会话，**立即删除**其
+  `counters/*.cnt` 与 `logs/proc_{token}_*.log`（旧行为：等 30 天龄清理）。
+- **为什么必须双判据**：UI 删除 chat 内核只删索引不删会话文件；
+  手动删/挪文件则索引可能残留——任一单判据都漏掉一种死法。
+- **token 单向不可逆**：`{token}.cnt` 是三元组 crc32，无法从文件名反推
+  会话，故正向枚举活会话构建 live 集合、对差集清除；agent 维度取
+  agent.json `id` 与目录名双别名（多留无害，多删有害）。
+- **防误杀三重闸**：文件 mtime 宽限期 600s（防新建会话索引/文件迟落盘）；
+  chats.json 缺失/损坏 → 整个工作区跳过；解析不出 token 的文件名永不碰。
+- 零 pip 依赖；工具面与 schema 不变（仍 6 工具）。测试 116 → **128 passed
+  + 4 skip**（`tests/test_cleanup_stale.py` 新增 12 项）。
+
 ## [0.4.2] - 2026-09-05
 
 notice 语义收口（作者拍板）：**notice 只面向未来事件，获取当下结果归

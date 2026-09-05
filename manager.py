@@ -26,28 +26,35 @@
 
 import asyncio
 import collections
+import json
 import logging
 import os
 import subprocess
 import sys
 import time
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 try:
     from .sanitizer import Sanitizer
     from .utils import (
+        agent_aliases,
         get_data_dir,
         read_log_tail,
         sanitize_session_token,
+        session_file_candidates,
         session_key,
+        workspaces_root,
     )
 except ImportError:  # 兼容 pytest 直接以项目根导入
     from sanitizer import Sanitizer
     from utils import (
+        agent_aliases,
         get_data_dir,
         read_log_tail,
         sanitize_session_token,
+        session_file_candidates,
         session_key,
+        workspaces_root,
     )
 
 logger = logging.getLogger(__name__)
@@ -744,6 +751,139 @@ class ProcessManager:
                     continue
         if removed:
             logger.info("process-tools 清理旧日志/计数器 %d 个", removed)
+        return removed
+
+    # ── 死会话数据清理 ────────────────────────────────────
+
+    STALE_GRACE_SECONDS = 600.0
+
+    def cleanup_stale_sessions(
+        self,
+        workspaces: Optional[List[str]] = None,
+        grace: float = STALE_GRACE_SECONDS,
+    ) -> Tuple[int, int]:
+        """启动清理：会话已死则其计数器与日志即刻移除（startup hook 调用）。
+
+        会话判活采「chats.json 条目 ∧ 真实会话文件」**双存在**——UI 删除
+        chat 只删索引不删文件、手动删/挪文件则索引可能残留，任一单判据
+        都不可靠，两种死法必须全覆盖。token 是三元组的 crc32 单向映射，
+        无法从文件名反推会话，故正向枚举活会话构建 live 集合、对差集清除。
+
+        mtime 在宽限期（默认 600s）内的文件不删（防新建会话索引/文件
+        迟落盘的窗口误杀）；chats.json 缺失或损坏的工作区整体跳过——
+        读不到依据时绝不误删。返回 (删除计数器数, 删除日志数)。
+        """
+        if workspaces is None:
+            workspaces = self._scan_workspaces()
+        now = time.time()
+        removed_cnt = removed_log = 0
+        for ws in workspaces:
+            data = os.path.join(ws, "process_tools_data")
+            counters_dir = os.path.join(data, "counters")
+            logs_dir = os.path.join(data, "logs")
+            if not (os.path.isdir(counters_dir) or os.path.isdir(logs_dir)):
+                continue
+            try:
+                with open(os.path.join(ws, "chats.json"), encoding="utf-8") as f:
+                    chats = json.load(f).get("chats", [])
+            except (OSError, ValueError, AttributeError):
+                logger.debug("process-tools 清理跳过（chats.json 不可读）: %s", ws)
+                continue
+            live = self._live_tokens(ws, chats)
+            removed_cnt += self._sweep_dead_files(
+                counters_dir,
+                live,
+                lambda n: n[:-4] if n.endswith(".cnt") else None,
+                now,
+                grace,
+            )
+            removed_log += self._sweep_dead_files(
+                logs_dir, live, self._log_token_of, now, grace
+            )
+        if removed_cnt or removed_log:
+            logger.info(
+                "process-tools 死会话数据清理：计数器 %d 个 / 日志 %d 个",
+                removed_cnt,
+                removed_log,
+            )
+        return removed_cnt, removed_log
+
+    @staticmethod
+    def _scan_workspaces() -> List[str]:
+        """workspaces/ 下全部一级子目录（各 agent 工作区）。"""
+        root = workspaces_root()
+        if not root:
+            return []
+        try:
+            return [
+                os.path.join(root, d)
+                for d in sorted(os.listdir(root))
+                if os.path.isdir(os.path.join(root, d))
+            ]
+        except OSError:
+            return []
+
+    @staticmethod
+    def _log_token_of(name: str) -> Optional[str]:
+        """从 proc_{token}_{N}.log 提取会话 token；解析不出的名字返回 None（永不碰）。"""
+        if not (name.startswith("proc_") and name.endswith(".log")):
+            return None
+        token, sep, digits = name[len("proc_"):-len(".log")].rpartition("_")
+        return token if sep and digits.isdigit() else None
+
+    @staticmethod
+    def _live_tokens(ws: str, chats: list) -> Set[str]:
+        """枚举该工作区「索引与文件双活」chat 的 token live 集合。
+
+        token 文本必须与 exec 时 session_key 三元组拼法逐字一致：
+        "agent|user|session"（原字符，非文件名净化形态）。agent 维度取
+        agent.json id 与目录名双别名——多留无害，多删有害。
+        """
+        live: Set[str] = set()
+        aliases = agent_aliases(ws)
+        sessions_dir = os.path.join(ws, "sessions")
+        for chat in chats:
+            try:
+                sid = str(chat["session_id"])
+                uid = str(chat.get("user_id") or "")
+                channel = str(chat.get("channel") or "")
+            except (KeyError, TypeError):
+                continue
+            if not sid:
+                continue
+            candidates = session_file_candidates(sessions_dir, sid, uid, channel)
+            if not any(os.path.exists(p) for p in candidates):
+                continue
+            for alias in aliases:
+                live.add(sanitize_session_token(f"{alias}|{uid}|{sid}"))
+        return live
+
+    @staticmethod
+    def _sweep_dead_files(
+        directory: str,
+        live: Set[str],
+        token_of: Callable[[str], Optional[str]],
+        now: float,
+        grace: float,
+    ) -> int:
+        """删除目录中 token 不活且超过宽限期的文件，返回删除数。"""
+        removed = 0
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            return 0
+        for name in names:
+            token = token_of(name)
+            if token is None or token in live:
+                continue
+            path = os.path.join(directory, name)
+            try:
+                if now - os.path.getmtime(path) < grace:
+                    continue
+                os.remove(path)
+                removed += 1
+            except OSError:
+                continue
         return removed
 
 

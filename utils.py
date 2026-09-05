@@ -5,11 +5,12 @@
 整数参数兼容解析、日志尾部读取等工具共享的底层能力。
 """
 
+import json
 import logging
 import os
 import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,80 @@ def get_data_dir() -> str:
     """插件数据根目录 {ws}/process_tools_data。测试时被 mock。"""
     ws = get_workspace_dir() or os.path.join(os.path.expanduser("~"), ".qwenpaw")
     return os.path.join(ws, "process_tools_data")
+
+
+# ── 会话生死判定（死会话数据清理用）─────────────────────
+
+_FILENAME_UNSAFE_RE = re.compile(r'[\\/:*?"<>|]')
+
+
+def kernel_sanitize_filename(name: str) -> str:
+    """复用内核会话文件名净化（非法字符→"--"），导入失败本地同规则回落。"""
+    try:
+        from qwenpaw.app.chats.session import sanitize_filename as _k
+
+        return _k(name)
+    except Exception:  # noqa: BLE001
+        return _FILENAME_UNSAFE_RE.sub("--", name)
+
+
+def session_file_candidates(
+    sessions_dir: str,
+    session_id: str,
+    user_id: str = "",
+    channel: str = "",
+) -> List[str]:
+    """一条 chat 记录对应的真实会话文件候选路径。
+
+    命名规则对齐内核 session_filename()（非法字符→"--"、uid==sid 省段），
+    含现行 channel 子目录布局与旧版 sessions/ 根目录兜底。
+    """
+    safe_sid = kernel_sanitize_filename(str(session_id or ""))
+    safe_uid = kernel_sanitize_filename(str(user_id or "")) if user_id else ""
+    if safe_uid and safe_uid == safe_sid:
+        safe_uid = ""
+    fname = f"{safe_uid}_{safe_sid}.json" if safe_uid else f"{safe_sid}.json"
+    rels: List[str] = []
+    safe_ch = kernel_sanitize_filename(str(channel or ""))
+    if safe_ch and safe_ch not in (".", ".."):
+        rels.append(os.path.join(safe_ch, fname))
+    rels.append(fname)
+    return [os.path.join(sessions_dir, r) for r in rels]
+
+
+def workspaces_root() -> Optional[str]:
+    """全部 agent 工作区的公共父目录 …/.qwenpaw/workspaces。
+
+    从当前 workspace 向上推导；结构不符回落 ~/.qwenpaw/workspaces；
+    仍不存在返回 None（调用方据此跳过清理）。
+    """
+    ws = get_workspace_dir()
+    if ws:
+        parent = os.path.dirname(os.path.normpath(str(ws)))
+        if os.path.basename(parent).lower() == "workspaces" and os.path.isdir(parent):
+            return parent
+    cand = os.path.join(os.path.expanduser("~"), ".qwenpaw", "workspaces")
+    return cand if os.path.isdir(cand) else None
+
+
+def agent_aliases(ws_dir: str) -> List[str]:
+    """workspace 目录下 agent_id 的可能取值（agent.json["id"] 优先，目录名兜底）。
+
+    运行期 contextvar 实际值必居其一；两个都作候选键是防误判措施——
+    live 集合多留无害，多删有害。
+    """
+    aliases: List[str] = []
+    try:
+        with open(os.path.join(ws_dir, "agent.json"), encoding="utf-8") as f:
+            aid = json.load(f).get("id")
+        if isinstance(aid, str) and aid:
+            aliases.append(aid)
+    except (OSError, ValueError, AttributeError):
+        pass
+    base = os.path.basename(os.path.normpath(ws_dir))
+    if base and base not in aliases:
+        aliases.append(base)
+    return aliases
 
 
 # ── 截断 ──────────────────────────────────────────────────

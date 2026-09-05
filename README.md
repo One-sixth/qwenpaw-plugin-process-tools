@@ -43,6 +43,11 @@
 - **三路数据流（v1 两路）**：512KB 环形缓冲（`read_stdout` 回放/增量续读）+
   净化日志落盘（剥 ANSI、折叠 `\r` 覆写、增量 UTF-8），
   路径 `{workspace}/process_tools_data/logs/proc_{session}_{N}.log`
+- **死会话自动清理**：宿主启动时按双判据判活——chats.json 条目 **与**
+  真实会话文件（`sessions/<channel>/<uid>_<sid>.json`）双存在才算活
+  （UI 删 chat 只删索引不删文件，手动删文件只留索引，任一死法都要认）；
+  死会话的 `counters/*.cnt` 与 `logs/proc_*.log` 立即删除。宽限期 600s
+  防误杀新建会话，chats.json 不可读则整个工作区跳过；另有 30 天龄兜底清理
 - **通知系统**：完成通知幂等；周期通知间隔 ≥30s（推荐 ≥900s，省 token）；
   投递 = `console_push_store` 通知气泡 +（可选）`/chat/task` 后台任务唤醒 agent，
   会话忙碌自动排队、空闲后送达（重试 20×30s 上限，超时会过期）

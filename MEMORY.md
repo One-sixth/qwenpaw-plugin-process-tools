@@ -510,20 +510,52 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
   核收时全文件 hash 零漂移；0.4.1 埋点改动在工作区未 commit（规则：commit
   由作者决定），装机核收需重启宿主（会杀本会话宿主进程，由作者择机）。
 
+### 0.4.3 死会话数据清理轮（2026-09-05 收尾前作者追加需求）
+
+- **需求**：真实会话文件已没时（被删除），磁盘计数器一并清掉。调查发现
+  内核 `DELETE /chats/{id}` **只删 chats.json 条目，不删会话文件**
+  （api.py 明文注释），而手动删文件则索引残留——任一单判据都漏一种死法，
+  故采**双判据**：条目 ∧ 真实会话文件（`sessions/<channel>/<uid>_<sid>.json`
+  现行布局 + legacy 根目录兜底，命名规则对齐内核 `session_filename()`）
+  双存在才算活。
+- **实现** `manager.cleanup_stale_sessions(workspaces=None, grace=600)`
+  （startup hook 挂接）：token 是 crc32 单向映射不可从文件名反推，
+  正向枚举各 workspace chats.json 活条目算 live token 集合，对
+  `counters/*.cnt` 与 `logs/proc_*_{N}.log` 差集清除。防误杀三闸：
+  mtime 宽限期 600s、chats.json 缺失/损坏整 ws 跳过、解析不出 token
+  的文件名（含 `.cnt.tmp` 残留）永不碰。agent 维度取 agent.json id +
+  目录名**双别名**（多留无害多删有害）。多工作区扫描：`workspaces_root()`
+  从当前 ws 上推、回落 `~/.qwenpaw/workspaces`。
+- **实环境干跑验证**（只读）：34 chats 全判活；仅 `default|default|default`
+  （无会话归属垃圾）、bu2tuw8（UI 删除会话的 7 日志——正是本功能靶场景）、
+  `default|main|g9t2380`（0.1.1 幽灵 user 化石）三类被判死，共 1 cnt +
+  10 log；4 个真实会话全数保全。
+- **勘误**：前轮「xxu4jne 缺 #8 日志实证烧号」说法**不成立**——#8 日志
+  实际在场（当时目录列举看漏），烧号语义本身不变（启动失败占号文案
+  仍在），但那条"实证"作废。
+- 测试 116 → **128 passed + 4 skip**（test_cleanup_stale.py 12 项）；
+  工具面与 schema 不变；文档四件套（README/CHANGELOG/AGENTS/plugin.json
+  0.4.3）已同步。待作者 commit + 重装重启（清理在重启时生效）。
+
+---
+
 ### 现状快照与会话交接（2026-09-05 notice 收口轮之后）
 
-- **版本**：v0.4.2——6 工具；exec 七参数；0.4.1=唤醒失败 reason 埋点、
+- **版本**：v0.4.3——6 工具；exec 七参数；0.4.1=唤醒失败 reason 埋点、
   0.4.2=notice 语义收口（已结束→error 引导 check；异步到期投递不变、
-  忙排队空闲送达）。**notice=未来事件 / check=当下与过去 / wait=未完成**
+  忙排队空闲送达）、0.4.3=死会话数据清理（双判据即删 cnt+日志）。
+  **notice=未来事件 / check=当下与过去 / wait=未完成**
   的时态三分定稿（作者拍板+纠偏）。
-- **git**：0.4.1=`8fff884`、0.4.2=`67ac269` 均已由作者 commit；本会话
-  后续文档对齐（AGENTS/README/本文件）留工作区。
-- **测试**：**116 passed + 4 skip**（skip 全为平台守卫）；跑测试用
+- **git**：0.4.1=`8fff884`、0.4.2=`67ac269`、0.4.2 文档=`5f99e29` 均已由
+  作者 commit；**0.4.3 改动在工作区待 commit**（utils/manager/plugin +
+  新测试 + 文档四件套）。
+- **测试**：**128 passed + 4 skip**（skip 全为平台守卫）；跑测试用
   `envs\qwenpaw\python.exe`；notifier_wake 的 Proactor `__del__`
   ResourceWarning 为存量（基线同样存在）。
-- **装机状态**：✅ 0.4.2 已 `--force` 重装+重启，仓库零漂移；实链路两验
-  核销（已结束 notice 秒 error、繁忙期结束唤醒排队迟到送达）；跨重启
-  续号双实证（#9、#10/#11）。
+- **装机状态**：装机仍为 0.4.2（0.4.2 曾 `--force` 重装+重启核销：实链路
+  两验通过——已结束 notice 秒 error 引导 check、繁忙期结束唤醒排队迟到
+  送达；跨重启续号双实证 #9、#10/#11）；**0.4.3 待重装+重启**后死会话
+  清理生效（实环境干跑已预验判决：仅清 1 cnt + 10 log，全为死会话/垃圾）。
 - **遗留待办**：① Linux/macOS 实机 POSIX 分支（bash 默认壳路径，云端
   实测优先级↑）；② 唤醒重试 10 分钟上限（20×30s）是否放宽——连续繁忙
   超 10 分钟通知会过期，等真实场景反馈；③ 远期：PTY 双后端、

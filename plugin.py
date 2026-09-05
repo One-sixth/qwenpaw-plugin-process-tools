@@ -129,11 +129,15 @@ class ProcessToolsPlugin:
         logger.info("✓ Process Tools 插件注册完成（6 个工具）")
 
     def _startup_cleanup(self) -> None:
-        """启动时清理超过 30 天的进程日志。"""
+        """启动清理：30 天龄日志/计数器 + 死会话（索引或文件已没）数据即除。"""
         try:
             get_manager().cleanup_old_logs(days=30)
         except Exception as e:  # noqa: BLE001
             logger.warning("process-tools 启动清理出错: %s", e)
+        try:
+            get_manager().cleanup_stale_sessions()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("process-tools 死会话数据清理出错: %s", e)
 
     async def _shutdown_all(self) -> None:
         """应用退出时终止所有仍在运行的托管进程（防孤儿）。"""
