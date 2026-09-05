@@ -33,10 +33,10 @@
   `make_success/make_error` 统一 ToolChunk
 - **async 工具**：agentscope Toolkit 支持 coroutine 工具函数（`_toolkit.py` 检查
   `iscoroutinefunction`），治理包装器 `_policy_tool_call` 本身就是 async——
-  本插件 5 个工具全部 async
+  本插件 6 个工具（0.4.0 起）全部 async
 
 ### 治理集成
-- 5 个工具全部 `tool_type="shell"`
+- 6 个工具全部 `tool_type="shell"`
 - `process_tools_exec` 用 `target_param="command"`（shell 逃逸检测生效）；
   其余工具 `target_param=""`（无 shell 命令参数，跳过逃逸检测但同受 shell 类策略管辖）
 
@@ -310,29 +310,154 @@ shell detector 无误杀 ✅。仍待专测：/chat/task 唤醒闭环、多 agen
 
 ---
 
-## 现状快照与会话交接（截至 2026-09-05 本开发会话）
+## exec 参数扩展轮（0.4.0，2026-09-05）
 
-- **版本**：v0.3.2（及时刷新定稿：chat-status×发送按钮 loading×run
-  身份键 + 编号续号兜底），插件名「QwenPaw 增强多进程管理插件」
-- **git**：✅ 全部已 commit（作者 2026-09-05 提交 5 笔：
-  `6d96a44`=0.1.2 唤醒寻址、`322f10c`=0.2.0 指纹+前端首版、
-  `cbd7feb`=0.2.1/0.3.0草案 wake 打点+计数器、`b9ffadb`=0.3.0 chat-status、
-  `32902bf`=0.3.2 run 键定稿；MEMORY 收尾修订留工作区）
-- **测试**：71 passed + 1 skip；跑测试用 `envs\qwenpaw\python.exe`
-- **安装状态**：✅ 宿主已跑 0.3.2（探针响应带 `run_at` 实锤；装机目录
-  与仓库逐文件哈希一致，仅 MEMORY.md 文档差异）。45s notice 唤醒场景
-  实测通过；日志同 token 续号 #1→#3 正常。cmd 彩蛋：`cmd /c` 整行在
-  **解析期一次性展开** `%TIME%`，`&&` 串多段 echo 时间戳同刻——非插件
-  bug，写多段命令/排障时留意（要逐段实时值得用 `!TIME!` 延迟展开或拆调用）。
-  ④跨重启续号留待下次宿主重启顺带核：同 token 应发 max(logs)+1（本
-  token 现至 #3）。探针备查：处理中 `curl .../api/process-tools/chat-status?chat_id=<本chatUUID>`
-  回 `{"status":"running","run_at":<epoch>}`，响应带 run_at=0.3.2 已加载。
-- **遗留物**：无（幽灵会话与 main_ session 文件已被用户清理）
+### 已落地 4 参数（作者拍板：🟢 中先做 detach/env/name/hide_window）
+- **`detach`（核心拍板）**：「允许启动一个不受我们控制的进程，agent 自己用
+  PID 管理」——一次性 `subprocess.Popen`，stdio 全 DEVNULL、
+  无 reader/monitor、不进注册表、**不消耗 #N 编号**、不占并发名额、
+  宿主退出后继续运行。Win
+  `CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW`（**不能用 DETACHED_PROCESS**，
+  见「评审落地轮」PS 罢工坑）、POSIX `start_new_session`（免疫 SIGHUP）。
+  返回 OS 级 PID（是 shell 进程的 pid，杀整树 Windows 要 `/F /T`、
+  POSIX 可 `kill -- -PID`）。background/timeout/max_output_chars/encoding
+  失效。zombie 语义：宿主活着时 Popen 弃置对象进 subprocess._active，
+  后续任何 Popen 创建会顺带 `_cleanup()` 回收已退出的——QwenPaw 常态
+  起进程，泄漏有界，接受。
+- **`env`**：增量语义 `{**os.environ, **clean}`（subprocess env 是全量
+  替换，不并入宿主环境 PATH/SystemRoot 直接丢光）。`utils.parse_env`
+  兼容 dict 与 JSON 字符串（通道字符串化防御，file-tools 教训 #14 同款）、
+  键值 str 化（LLM 传 {"PORT": 8080} 很常见）。
+- **`name`**：≤80 字符存、展示截 40，四处渲染 `#N「标签」`
+  （exec 返回 / check 头 / list summary_line / notifier 完成+周期消息头）。
+- **`hide_window`**：仅 Windows 托管路径——`CREATE_NO_WINDOW` +
+  STARTUPINFO(SW_HIDE)。detach 无需（其 spawn 恒带 NO_WINDOW）。
+  实测要点：宿主有控制台时子进程共享 console 本来就不弹窗，此参数主要
+  服务「宿主无控制台（pythonw/服务化）时跑 console 程序」的场景。
 
-### 下一会话待办（按优先级）
-1. **Linux/macOS 实机**：POSIX 分支（start_new_session/killpg/SIGINT 优雅
-   语义）未经真实宿主验证，值得上云跑一轮 pytest
-2. 远期可选：PTY 双后端、上游提 `qwenpaw:chat-reload` 软刷新需求
-   （届时把 reload 升级无痕）、周期通知 token 实测、气泡 60s 过期错过的
-   补偿、run_at 是 workspace 级——同 agent 多 chat 并发时键会漂（现状
-   影响：可能提前放行下一次刷新许可，有两刷上限+15s 间隔垫底，暂不处理）
+### 探针沉淀
+- asyncio `create_subprocess_shell` 实测拒绝 `text`/`encoding`/
+  `universal_newlines`（强制 bytes 流）——编码只能在自己管线里做，
+  别指望 spawn 层；接受 `env/executable/limit/startupinfo/creationflags/
+  process_group/close_fds`；`pass_fds` Windows 不支持。
+- QwenPaw schema 生成器对 `dict`→object、`list`→array、`bool`→boolean、
+  `Union[str, list]`→anyOf 全支持，新类型参数无障碍（探针脚本模式：
+  qwenpaw 环境跑 `agentscope.tool._utils._extract_input_schema`）。
+
+### 框架惯例对齐轮（子 Agent 调查 execute_shell_command，2026-09-05）
+零上下文子 Agent 对 `<site-packages>/qwenpaw/agents/tools/shell.py` 等的
+调查报告，**全文归档 `docs/框架execute_shell_command调查报告.md`**（签名/
+env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟对照表），
+采纳项：
+- **env 合并惯例**：框架不把 env 暴露为 LLM 参数，入口固定
+  `os.environ.copy()` + **PATH 前置 `sys.executable` 目录**（子进程
+  python/pip 命中框架环境）；envs.json 变量走 os.environ 注入被我们
+  免费继承。我们实现 `manager.build_subprocess_env()`：宿主 ⊕ 用户 env
+  ⊕ PATH 前置（Windows 键名大小写变体归并，学它的 Path/PATH 检测）。
+  **PATH 前置是无条件常开**（框架同款），用户即使覆写 PATH 也被前置
+  宿主 python 目录压过首位。
+- **smart_decode 三板斧（UTF-8 严格→locale 回退）**：与作者拍板的
+  auto=本机编码**不同**——我们 auto 用**控制台码页**而非 locale（见下），
+  差异有意为之：auto 报告要诚实标注单一 codec，混码场景交给 agent 显式
+  切换。框架沙箱路径硬编码 utf-8 不一致是它的坑，别跟。
+- **不跟清单**：`timeout == 60.0` 相等判断回填默认值（应 None 哨兵）；
+  env 黑名单置空非删除；声明未实现字段；sandbox_config 裸露 schema。
+- 框架 stdout/stderr **分临时文件捕获**（Windows 管道句柄继承会挂死
+  communicate——它注释里明说的实战坑）。我们是常驻 reader 流式读取，
+  场景不同不受制，但「Windows 管道句柄挂死」在 v1 无 PTY 路线上留档。
+
+### encoding 参数（第二波落地，含 PYTHONUTF8 大坑）
+- 现象：第一版 auto 用 `locale.getpreferredencoding(False)`，本机实测
+  返回 **utf-8**（宿主设了 `PYTHONUTF8=1`，UTF-8 模式下 preferred 被
+  翻转），cmd 原生 GBK 输出依旧乱码——**修了个寂寞**。且首版冒烟脚本
+  断言被「命令回显行含中文」污染而假通过（做事后要拿无污染证据）。
+- 正解：Windows 的"本机编码"=控制台输出码页
+  `ctypes.windll.kernel32.GetConsoleOutputCP()`（936→codecs 规范名 gbk；
+  65001→utf-8 天然兼容），POSIX 才用 locale。`utils._auto_codec()`。
+- 接线面（三处硬编码 UTF-8 全参数化）：Sanitizer(encoding=) 增量解码、
+  sanitize_full(encoding=)（read_stdout 回放用 mp.encoding）、
+  write_stdin 用 mp.encoding 编码。**日志文件恒 UTF-8**（解码前落盘后，
+  编码切换不动存量）。detach 无管道，encoding 无效（docstring 标明）。
+- 返回信息：`stdin/stdout/stderr encoding=gbk（auto=本机编码；若输出一堆
+  ??? 乱码请显式调整 encoding，如 utf-8）`（作者点名设计）；显式值时只报
+  `encoding=gbk`。前台/后台两个返回分支都带。
+- 混码现实：本机 ACP=936 但子 **python** 继承 PYTHONUTF8=1 会输出
+  UTF-8——单 codec 流无完美解，auto 报告 + agent 显式切换就是设计意图。
+
+### no_shell 参数（第二波落地）
+- 托管 `create_subprocess_exec(*argv)` / detach `Popen(argv, shell=False)`；
+  command 双形态 `Union[str, list]`（schema anyOf ✅），JSON 字符串列表
+  有 `utils.parse_argv` 通道防御，元素统一 str。误配双向报错
+  （list 没开 no_shell / 开了 no_shell 传普通字符串都引导）。
+- ManagedProcess 存储约定：`_spawn_target`（str|list 用于 spawn）+
+  `self.command`（join 后的展示串，list/check/日志字段全走展示串）——
+  下游对 argv 形态零感知。
+- 卖点即陷阱 #4 的正解：argv 里 `< > & |` 字面传参、无 `%TIME%` 解析期
+  展开、无单双引号地狱；代价无 shell 组合语义。
+
+### stdin/stdout/stderr encoding 现状调查（2026-09-05 第一波，作者点名）
+- **spawn 层**：纯 bytes（见上探针），无编码概念。
+- **stdout/stderr 方向**：子进程原始 bytes → 环形缓冲（**字节级，编码无关
+  ✅**）→ Sanitizer `codecs.getincrementaldecoder("utf-8")(errors="replace")`
+  ——**UTF-8 硬编码**，非法字节替换成 U+FFFD → 净化日志以 UTF-8 落盘。
+- **stderr**：`stderr=STDOUT` 合流进 stdout，**无独立编码通道**（v1 拍板）。
+- **stdin 方向**：`write_stdin` 里 `data.encode("utf-8", errors="replace")`
+  ——**UTF-8 硬编码**。
+- **实测复现（本机中文 Windows，代码页 936）**：`cmd /c echo 中文测试`
+  输出乱码 `???Ĳ??`——cmd 原生命令输出 GBK bytes，被按 UTF-8 解码替换。
+- **根因定性**：字节管线正确，问题只在 **decode/encode 策略层两端硬编码
+  UTF-8**。中文 Windows 上 cmd 内建命令/GBK 工具输出必乱码；反向
+  write_stdin 给 GBK 程序中文也会乱码。Python 子进程默认也按 ANSI
+  (cp936) 写管道（除非 PYTHONIOENCODING/chcp 65001）。
+- **当前 workaround（0.4.0 env 参数落地后）**：`env={"PYTHONIOENCODING":
+  "utf-8"}` 治 Python 子进程；命令前缀 `chcp 65001>nul && ` 治 cmd 原生
+  输出。彻底解=暴露 `encoding` 参数（要动 Sanitizer 增量解码器+
+  write_stdin+日志读取三处，另轮拍板）。
+
+### 评审落地轮（第三波：wait 工具 + shell 枚举，2026-09-05 作者逐项拍板）
+- **裁决记录**：W1 超时返回 error「进程 #N 仍运行中」文案；W2 **process_id
+  支持列表**（all 语义，JSON 串通道防御）；W3 无 kill_on_timeout 参数、
+  超时文案**不带任何杀进程引导**；W4 detach 进程不可 wait（不在注册表，
+  docstring 已明说）。**stdin_data 作者否决**（别再提，除非作者翻案）。
+  executable 演化 → **shell 枚举 `default / pwsh / bash`**。
+- **`process_tools_wait`（第 6 工具）**：`wait(process_id, timeout=60,
+  tail_lines=20)`。纪律：超时/取消只毁本次等待绝不杀（wrapper task 取消
+  安全，内层 shield future 无伤）；已结束幂等即返；批量共享一个 timeout
+  预算，error 里点名仍运行的+列出已结束的；tail_lines=0 只回状态行（批量
+  收口省 token）。asyncio.wait 在 3.12+ 拒收裸 Future——**包成 task 再等**。
+- **shell 枚举**：`resolve_shell_argv`（utils）→ 工具层把 str 命令包装成
+  `[exe, *flags, command]` 走 create_subprocess_exec（**create_subprocess_shell
+  自此只剩 manager 直连测试路径在用**）。default：Win pwsh→powershell→cmd
+  回落、POSIX bash→sh 回落；显式选择找不到→报错引导不静默换壳。ManagedProcess
+  新增 `display` 参数：shell 前缀不进回显（用户命令原文展示）。
+  **行为变更警示**：Windows 默认壳 cmd→pwsh，agent 写命令遇怪现象先想这条
+  （PS 带引号 exe 路径要 `& `、`$var` 是插值、cmd 内建是 alias 语义）。
+  测试 helper `py_cmd` 改裸路径形态（不带引号）= cmd/pwsh/bash 三壳公约数，
+  含空格路径的机器需要改（helpers docstring 已录）。
+- **DETACHED_PROCESS 大坑（变体矩阵实测）**：完全无 console 时 PowerShell
+  （7 和 5.1 一样）**静默罢工**——0.3s 内 exit 0、零输出、-Command 根本不
+  执行；stdin DEVNULL/PIPE/inherit 三变体全灭，EncodedCommand 也救不了。
+  正解 `CREATE_NO_WINDOW`（有 console 无窗口）：detach 语义不变（宿主退出
+  不连坐）、PS 正常干活、矩阵 3/3 存活。**教训：给 PS 类宿主程序加
+  creationflags 变体必须实测，不能按 Win32 文档想当然**。
+
+### 搁置新想法（作者点名记录，未排期）
+- 「让 process_tools 操作 OS 里任意 PID 的进程」（attach/taskkill 系统进程、
+  按 PID 查询等）——作者 2026-09-05 评审 W4 时提出，**先搁置**。
+
+### 现状快照与会话交接（截至 2026-09-05 0.4.0 开发会话）
+
+- **版本**：v0.4.0——**6 工具**（+process_tools_wait）；exec **七参数**
+  （env/name/hide_window/detach/encoding/no_shell/shell）+ 框架 PATH 惯例
+  对齐；0.3.2 的及时刷新定稿内容全部保留
+- **git**：⚠️ 0.4.0 改动在工作区**未 commit**（规则：commit 由作者决定）
+- **测试**：**113 passed + 4 skip**（test_exec_params 36 + test_wait 10；
+  skip 全为平台守卫）；跑测试用 `envs\qwenpaw\python.exe`；notifier_wake 的
+  Proactor `__del__` ResourceWarning 为存量问题（基线 HEAD 同样存在）
+- **装机状态**：⏳ 宿主还在跑 0.3.2，0.4.0 待 commit 后 `--force` 重装核收
+  （重点：detach+pwsh 包装实链路、wait 唤醒场景共存、agent 通道传 argv/
+  id 列表的 JSON 串防御、默认壳切 pwsh 后 agent 写命令的体感）
+- **0.3.2 遗留待办不变**：① Linux/macOS 实机 POSIX 分支（本轮新增 bash
+  默认壳路径，云端实测优先级↑）；② 远期：PTY 双后端、`qwenpaw:chat-reload`
+  上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级
+  键漂移；③ 跨重启续号下次宿主重启顺带核

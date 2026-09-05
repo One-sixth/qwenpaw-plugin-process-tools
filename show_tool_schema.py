@@ -20,6 +20,7 @@ from agentscope.tool._utils import _extract_input_schema
 from tools.exec import process_tools_exec
 from tools.check import process_tools_check
 from tools.list import process_tools_list
+from tools.wait import process_tools_wait
 from tools.communicate import process_tools_communicate
 from tools.notice import process_tools_notice
 
@@ -34,7 +35,7 @@ def _extract_description(func) -> str:
 
 tools = [
     ("执行", [process_tools_exec]),
-    ("查询", [process_tools_list, process_tools_check]),
+    ("查询", [process_tools_list, process_tools_check, process_tools_wait]),
     ("交互", [process_tools_communicate]),
     ("通知", [process_tools_notice]),
 ]
