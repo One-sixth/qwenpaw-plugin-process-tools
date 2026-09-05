@@ -76,12 +76,15 @@ class Sanitizer:
     （flush()/get_pending() 可随时取走残段）。残段以悬空 `\r`
     结尾时视为"等待被覆写"，新到的字节会接在同一行里由
     collapse_cr 处理。
+
+    encoding 决定原始字节的解码方式（默认 utf-8，托管进程可按
+    exec 的 encoding 参数指定，如中文 Windows 原生输出的 gbk）。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, encoding: str = "utf-8") -> None:
         import codecs
 
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
         self._pending = ""  # 未换行的残段（未净化）
 
     def feed(self, data: bytes) -> str:
@@ -128,14 +131,15 @@ def collapse_cr_pending(text: str) -> str:
     return text
 
 
-def sanitize_full(data: bytes, final: bool = True) -> str:
+def sanitize_full(data: bytes, final: bool = True, encoding: str = "utf-8") -> str:
     """一次性净化整段字节（用于读取环形缓冲/日志等非增量场景）。
 
     Args:
         data: 原始字节
         final: 是否按已结束处理（折叠最后一段）
+        encoding: 解码 codec 名
     """
-    s = Sanitizer()
+    s = Sanitizer(encoding)
     text = s.feed(data)
     if final:
         text += s.flush()

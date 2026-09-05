@@ -112,8 +112,9 @@ class Notifier:
             "failed": "❌ 失败",
             "killed": "🛑 已终止",
         }.get(mp.status, mp.status)
+        label = f"「{mp.name}」" if mp.name else ""
         head = (
-            f"[进程 #{mp.num} {state_cn}]"
+            f"[进程 #{mp.num}{label} {state_cn}]"
             f" exit={mp.exit_code} 用时 {mins}m{secs:02d}s\n"
             f"命令：{truncate_line(mp.command, 120)}\n"
             f"日志：{mp.log_path}"
@@ -127,8 +128,9 @@ class Notifier:
         mins, secs = divmod(int(mp.elapsed()), 60)
         lines, _size = mp.get_log_tail(5)
         tail = "\n".join(lines) if lines else "（暂无输出）"
+        label = f"「{mp.name}」" if mp.name else ""
         return (
-            f"[进程 #{mp.num} 运行中] 已运行 {mins}m{secs:02d}s\n"
+            f"[进程 #{mp.num}{label} 运行中] 已运行 {mins}m{secs:02d}s\n"
             f"命令：{truncate_line(mp.command, 120)}\n"
             f"输出末尾：\n{tail}"
         )

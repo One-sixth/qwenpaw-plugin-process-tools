@@ -29,8 +29,9 @@ import collections
 import logging
 import os
 import subprocess
+import sys
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 try:
     from .sanitizer import Sanitizer
@@ -85,29 +86,69 @@ def status_for_exit(exit_code, killed_by_us: bool) -> str:
     return STATUS_FAILED
 
 
+def build_subprocess_env(extra: Optional[dict] = None) -> dict:
+    """子进程环境：宿主 os.environ ⊕ 用户 env ⊕ PATH 前置宿主 python 目录。
+
+    对齐框架 execute_shell_command 惯例（shell.py 入口）：增量叠加、永不
+    全量替换；PATH 前置 sys.executable 所在目录使子进程 `python`/`pip`
+    命中框架所在环境；Windows 下 PATH 键名大小写变体（Path/path）做
+    不敏感归并，避免同键双份。
+    """
+    env = dict(os.environ)
+    if extra:
+        host_by_upper = {k.upper(): k for k in env}
+        for k, v in extra.items():
+            host_key = host_by_upper.get(k.upper())
+            if host_key is not None and host_key != k:
+                env.pop(host_key)  # 用户用变体键覆盖时先摘掉宿主那份
+            env[k] = v
+    bin_dir = os.path.dirname(sys.executable)
+    path_key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    cur = env.get(path_key, "")
+    env[path_key] = f"{bin_dir}{os.pathsep}{cur}" if cur else bin_dir
+    return env
+
+
 class ManagedProcess:
     """一个被托管的子进程。"""
 
     def __init__(
         self,
         num: int,
-        command: str,
+        command: Union[str, list],
         key: Tuple[str, str, str],
         cwd: str,
         log_path: str,
+        name: str = "",
+        env: Optional[dict] = None,
+        hide_window: bool = False,
+        encoding: str = "utf-8",
+        display: str = "",
     ) -> None:
         self.num = num  # 会话内编号 #N
-        self.command = command
+        # command 双形态：str=shell 命令行；list=argv 原生直启（no_shell）
+        # 存储/展示统一用字符串（shell 包装时 display 传用户原文，
+        # 回显不被 pwsh 前缀污染），spawn 用 _spawn_target
+        if isinstance(command, (list, tuple)):
+            self._spawn_target: Union[str, list] = [str(x) for x in command]
+            self.command = display or " ".join(self._spawn_target)
+        else:
+            self._spawn_target = str(command)
+            self.command = self._spawn_target
         self.key = key
         self.cwd = cwd
         self.log_path = log_path
+        self.name = (name or "").strip()[:80]  # 人肉标签（展示用）
+        self.encoding = encoding or "utf-8"  # 管道编解码 codec（auto 已由工具层解析）
+        self._env = env or None  # 增量环境变量（spawn 时并入 os.environ）
+        self._hide_window = bool(hide_window)  # Windows：压掉子进程控制台窗口
         self.started_at = time.time()
         self.finished_at: Optional[float] = None
         self.status = STATUS_RUNNING
         self.exit_code: Optional[int] = None
 
         self._proc: Optional[asyncio.subprocess.Process] = None
-        self._sanitizer = Sanitizer()
+        self._sanitizer = Sanitizer(self.encoding)
         self._log_handle = None
         self._log_lost = False  # 日志盘写失败后置 True（降级丢段）
         self._reader_task: Optional[asyncio.Task] = None
@@ -133,12 +174,19 @@ class ManagedProcess:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        # 对齐框架惯例：始终并入宿主环境 + PATH 前置宿主 python 目录
+        kwargs["env"] = build_subprocess_env(self._env)
         if os.name == "posix":
             kwargs["start_new_session"] = True
         else:
-            kwargs["creationflags"] = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0,
-            )
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if self._hide_window:
+                flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = 0  # SW_HIDE（subprocess 未导出该常量）
+                kwargs["startupinfo"] = si
+            kwargs["creationflags"] = flags
         # S2 修复：先备好日志文件句柄再 spawn——spawn 成功后若建目录失败，
         # 会留下一个无主句柄、不进注册表、无人可杀的孤儿进程。
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
@@ -146,11 +194,18 @@ class ManagedProcess:
             self.log_path, "a", encoding="utf-8", newline="\n",
         )
         try:
-            self._proc = await asyncio.create_subprocess_shell(
-                self.command,
-                cwd=self.cwd or None,
-                **kwargs,
-            )
+            if isinstance(self._spawn_target, list):
+                self._proc = await asyncio.create_subprocess_exec(
+                    *self._spawn_target,
+                    cwd=self.cwd or None,
+                    **kwargs,
+                )
+            else:
+                self._proc = await asyncio.create_subprocess_shell(
+                    self._spawn_target,
+                    cwd=self.cwd or None,
+                    **kwargs,
+                )
         except Exception:
             self._close_log()
             raise
@@ -288,7 +343,9 @@ class ManagedProcess:
             return f"进程 #{self.num} 已结束（状态 {self.status}），无法写入 stdin"
         assert self._proc.stdin is not None
         try:
-            self._proc.stdin.write(data.encode("utf-8", errors="replace"))
+            self._proc.stdin.write(
+                data.encode(self.encoding, errors="replace")
+            )
             await self._proc.stdin.drain()
         except Exception as e:  # noqa: BLE001
             return f"写入 stdin 出错：{e}"
@@ -441,12 +498,13 @@ class ManagedProcess:
         mins, secs = divmod(int(self.elapsed()), 60)
         state = self.status
         code = "" if self.exit_code is None else f" exit={self.exit_code}"
+        label = f"「{self.name[:40]}」" if self.name else ""
         cmd = self.command.replace("\n", " ")
         if len(cmd) > 80:
             # 统一用 <<truncated>> 截断风格（实机冒烟观感反馈）
             cmd = cmd[:80] + "<<truncated>>"
         return (
-            f"#{self.num} [{state}{code}] {mins // 60:02d}:"
+            f"#{self.num}{label} [{state}{code}] {mins // 60:02d}:"
             f"{mins % 60:02d}:{secs:02d} $ {cmd}"
         )
 
@@ -547,14 +605,26 @@ class ProcessManager:
             if mp.status == STATUS_RUNNING
         )
 
-    async def start(self, command: str, cwd: str = "") -> ManagedProcess:
+    async def start(
+        self,
+        command: Union[str, list],
+        cwd: str = "",
+        name: str = "",
+        env: Optional[dict] = None,
+        hide_window: bool = False,
+        encoding: str = "utf-8",
+        display: str = "",
+    ) -> ManagedProcess:
         """在当前会话注册表启动一个托管进程。
 
         Raises:
             RuntimeError: 并发运行数达到上限
         """
         key = session_key()
-        if not command or not command.strip():
+        if isinstance(command, (list, tuple)):
+            if not command:
+                raise RuntimeError("command 不能为空")
+        elif not str(command or "").strip():
             raise RuntimeError("command 不能为空")
         if self._running_count(key) >= MAX_RUNNING_PER_SESSION:
             raise RuntimeError(
@@ -568,7 +638,11 @@ class ProcessManager:
             "logs",
             f"proc_{self._session_token(key)}_{num}.log",
         )
-        mp = ManagedProcess(num, command, key, cwd, log_path)
+        mp = ManagedProcess(
+            num, command, key, cwd, log_path,
+            name=name, env=env, hide_window=hide_window, encoding=encoding,
+            display=display,
+        )
         try:
             await mp.start()
         except Exception as e:  # noqa: BLE001
@@ -578,6 +652,53 @@ class ProcessManager:
             ) from e
         self._sessions.setdefault(key, {})[num] = mp
         return mp
+
+    def spawn_detached(
+        self,
+        command: Union[str, list],
+        cwd: str = "",
+        env: Optional[dict] = None,
+    ) -> int:
+        """启动完全脱离托管的进程（detach 模式），返回 OS 级 PID。
+
+        command 双形态同托管路径：str 走 shell=True，list 走原生直启。
+        与托管路径相反的选择：stdio 全 DEVNULL（无 PIPE 也就无环形缓冲/
+        净化日志/reader 任务）、不注册不进 #N 编号、无 monitor（宿主退出
+        不清理它，也不受 shutdown_all 影响）。后续管理靠系统命令用 PID
+        自理（Windows taskkill / 类 Unix kill）。同步函数，async 侧放
+        to_thread 调用。
+        """
+        if isinstance(command, (list, tuple)):
+            if not command:
+                raise RuntimeError("command 不能为空")
+            spawn: Union[str, list] = [str(x) for x in command]
+        else:
+            if not str(command or "").strip():
+                raise RuntimeError("command 不能为空")
+            spawn = str(command)
+        kwargs: dict = dict(
+            shell=isinstance(spawn, str),
+            cwd=cwd or None,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=build_subprocess_env(env),
+        )
+        if os.name == "posix":
+            # 新会话：脱离宿主进程组，免疫宿主终端的 SIGHUP/整组信号
+            kwargs["start_new_session"] = True
+        else:
+            # CREATE_NO_WINDOW：子进程获得「没有窗口的独立 console」——
+            # 宿主退出关控制台时它不被连坐（达成 detach 语义），且无窗可弹。
+            # ⚠️ 不用 DETACHED_PROCESS 的实测依据（2026-09-05）：完全无
+            # console 时 PowerShell（7 与 5.1 同病）无法初始化宿主，
+            # 0.3 秒内 exit 0 静默罢工、-Command 根本不执行——detach +
+            # shell=pwsh 组合全军覆没；CREATE_NO_WINDOW 变体矩阵 3/3 存活。
+            kwargs["creationflags"] = (
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+        return subprocess.Popen(spawn, **kwargs).pid
 
     def get(self, num: int) -> Optional[ManagedProcess]:
         """按 #N 查当前会话的进程。跨会话不可见。"""

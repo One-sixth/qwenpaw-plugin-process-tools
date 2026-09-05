@@ -49,8 +49,9 @@ async def process_tools_check(process_id, tail_lines: int = 20):
 
     mins, secs = divmod(int(mp.elapsed()), 60)
     code = f" exit={mp.exit_code}" if mp.exit_code is not None else ""
+    label = f"「{mp.name}」" if mp.name else ""
     head = (
-        f"#{mp.num} [{mp.status}{code}] "
+        f"#{mp.num}{label} [{mp.status}{code}] "
         f"已运行 {mins // 60:02d}:{mins % 60:02d}:{secs:02d}\n"
         f"命令：{truncate_line(mp.command, 120)}\n"
         f"日志：{mp.log_path}"

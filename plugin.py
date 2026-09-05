@@ -19,6 +19,7 @@ from .web_api import create_router
 from .tools.exec import process_tools_exec
 from .tools.check import process_tools_check
 from .tools.list import process_tools_list
+from .tools.wait import process_tools_wait
 from .tools.communicate import process_tools_communicate
 from .tools.notice import process_tools_notice
 
@@ -29,7 +30,7 @@ class ProcessToolsPlugin:
     """Process Tools 插件主类。"""
 
     def register(self, api: PluginApi) -> None:
-        logger.info("注册 Process Tools 插件（5 个工具）...")
+        logger.info("注册 Process Tools 插件（6 个工具）...")
 
         # Windows 上 asyncio 子进程依赖 ProactorEventLoop；若宿主跑在
         # Selector 循环上，create_subprocess_shell 会直接 NotImplementedError，
@@ -77,6 +78,15 @@ class ProcessToolsPlugin:
             target_param="",
             enabled=True,
         )
+        api.register_tool(
+            tool_name="process_tools_wait",
+            tool_func=process_tools_wait,
+            description="前台主动等待一个或一批后台进程结束（all 语义，超时不杀进程）。",
+            icon="⏳",
+            tool_type="shell",
+            target_param="",
+            enabled=True,
+        )
 
         # ── 交互 ──
         api.register_tool(
@@ -116,7 +126,7 @@ class ProcessToolsPlugin:
             priority=110,
         )
 
-        logger.info("✓ Process Tools 插件注册完成（5 个工具）")
+        logger.info("✓ Process Tools 插件注册完成（6 个工具）")
 
     def _startup_cleanup(self) -> None:
         """启动时清理超过 30 天的进程日志。"""

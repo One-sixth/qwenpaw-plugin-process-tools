@@ -113,7 +113,7 @@ async def _do_read_stdout(mp, read_offset: Optional[int], max_bytes: Optional[in
     offset = max(offset or 0, 0)
 
     start, data, next_offset = mp.get_buffer(offset, size)
-    text = sanitize_full(data)
+    text = sanitize_full(data, encoding=mp.encoding)
     if not data:
         return make_success(
             f"偏移 {offset} 起无新输出"

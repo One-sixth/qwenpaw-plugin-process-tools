@@ -6,13 +6,14 @@
 核心思想是 **"进程是共享对象"**：agent 工具里的 `#N` 与日志文件指向同一个进程，
 会话内人机同一视图。
 
-## 功能概览（5 个工具）
+## 功能概览（6 个工具）
 
 | 工具 | 功能 |
 |------|------|
-| `process_tools_exec` | 启动托管 shell 进程。前台等待返回完整净化输出（超时自动杀进程），或后台立即返回编号 `#N` |
+| `process_tools_exec` | 启动托管 shell 进程。前台等待返回完整净化输出（超时自动杀进程），或后台立即返回编号 `#N`。支持 `env` 增量环境变量、`name` 标签、`hide_window`（Windows 隐窗）、`detach`（脱离托管只回 OS PID） |
 | `process_tools_list` | 列出本会话全部进程（编号/状态/退出码/时长/命令） |
 | `process_tools_check` | 查进程状态、退出码、运行时长、输出日志尾部与路径 |
+| `process_tools_wait` | 前台主动等待一个/一批后台进程结束（all 语义；超时只报「仍运行中」不杀进程） |
 | `process_tools_communicate` | 与进程交互：`write_stdin` / `read_stdout`（环形缓冲增量读）/ `send_sigint` / `send_sigkill` |
 | `process_tools_notice` | 注册完成/周期通知（opt-in，通知以用户消息级别送达：气泡 + 唤醒 agent） |
 
@@ -49,6 +50,23 @@
   `send_sigkill` 连子孙进程杀干净；前台等待被取消时尽力 kill，**绝不留孤儿**；
   应用退出钩子统一终止全部托管进程
 - **超时自解释**：前台超时返回"输出末尾 20 行 + 加大 timeout / background=True 建议 + 完整日志路径"
+- **`env` 增量环境变量**：在 `os.environ` 之上叠加、只对本进程生效（subprocess 的
+  env 是全量替换语义，代码里先并入宿主环境再覆盖）；兼容 dict 与 JSON 字符串（通道
+  字符串化防御），数值自动转 str
+- **`detach` 脱离托管**：`subprocess.Popen` 一次性 spawn，stdio 全 DEVNULL、无 reader/
+  monitor、不进注册表、不占并发名额、宿主退出不被清理，返回 **OS 级 PID**（非 `#N`）。
+  Windows 用 `CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW`（⚠️ 不能 `DETACHED_PROCESS`：
+  无 console 时 PowerShell 静默 exit 0 罢工），POSIX 用 `start_new_session`。之后管理交系统命令按
+  PID 自理；本插件的 list/check/communicate/notice 对它全部无效
+- **`name` 标签**：`exec`/`check`/`list`/通知消息头统一渲染 `#N「标签」`，纯展示
+- **`encoding` 编解码 codec**：输出解码与 stdin 编码共用；默认 `auto`=本机原生
+  编码（Windows 取控制台码页 `GetConsoleOutputCP`——宿主 `PYTHONUTF8=1` 会让
+  locale 谎报 utf-8，别用 `getpreferredencoding` 替代）。启动返回写明
+  `encoding=XXX`，乱码就显式传 `utf-8`/`gbk`。净化日志恒 UTF-8 落盘（解码在
+  前、落盘在后），环形缓冲存原始字节（编码无关）
+- **`no_shell` 原生直启**：command 传 argv 列表（或 JSON 数组字符串），
+  `create_subprocess_exec` 不经 shell——零引号地狱、元字符按字面传参；
+  无重定向/管道/通配符语义（需要就自己套一层 shell 命令字符串）
 
 ## 安装
 
@@ -67,8 +85,8 @@ qwenpaw app
 
 | 平台 | spawn | sigint | sigkill |
 |------|-------|--------|---------|
-| Linux / macOS | `/bin/sh -c` + `start_new_session` | SIGINT 主进程 / killpg 整组，**程序可捕获做优雅退出** | SIGKILL 整组 |
-| Windows | `cmd.exe /c` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK：⚠️ 实测**不经 CPython 信号机制**，自定义 handler 不会执行，进程以 `0xC000013A` 被 OS 终止（映射为 `killed` 状态），≈ 略轻于 sigkill 的第二档硬杀 | `taskkill /F /T` 杀树 |
+| Linux / macOS | shell 枚举包装：`bash -c`（default；回落 `/bin/sh`）经 `create_subprocess_exec` + `start_new_session` | SIGINT 主进程 / killpg 整组，**程序可捕获做优雅退出** | SIGKILL 整组 |
+| Windows | `pwsh -NoProfile -NonInteractive -Command`（default；回落 `cmd.exe /c`）经 `create_subprocess_exec` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK：⚠️ 实测**不经 CPython 信号机制**，自定义 handler 不会执行，进程以 `0xC000013A` 被 OS 终止（映射为 `killed` 状态），≈ 略轻于 sigkill 的第二档硬杀 | `taskkill /F /T` 杀树 |
 
 > **Windows 想优雅退出**：用 `write_stdin` 发送约定指令（如 REPL 的 `exit()`、
 > 或程序自定义的 quit 命令），不要指望 sigint。

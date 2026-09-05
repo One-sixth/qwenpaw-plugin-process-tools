@@ -41,6 +41,11 @@ def run(coro):
 
 
 def py_cmd(code: str) -> str:
-    """把 python 单行代码包装成跨平台 shell 命令字符串。"""
+    """把 python 单行代码包装成跨 shell 命令字符串。
+
+    跨 cmd / pwsh / bash 三壳可用：路径不带引号（本机 python.exe 无空格），
+    因为 pwsh 下带引号 exe 路径必须 `& ` 调用运算符前缀、而 `&` 在 cmd/bash
+    又是后台元字符——裸路径是唯一三壳公约数。路径含空格的机器需自行改造。
+    """
     quoted = code.replace('"', '\\"')
-    return f'"{sys.executable}" -u -c "{quoted}"'
+    return f"{sys.executable} -u -c \"{quoted}\""

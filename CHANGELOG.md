@@ -2,6 +2,86 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.4.0] - 2026-09-05
+
+exec 参数扩展：从「只有 command/background/timeout/cwd/max_output_chars」
+升级到暴露 subprocess 的可用能力（含 QwenPaw 框架惯例对齐）。
+
+### Added
+- **`env`（增量环境变量）**：dict 或 JSON 字符串（通道字符串化防御），
+  键值统一转 str。**对齐框架 execute_shell_command 惯例**（子 Agent
+  源码调查报告）：spawn 环境=宿主 `os.environ` ⊕ 用户 env ⊕ PATH 前置
+  宿主 `sys.executable` 目录（子进程 `python`/`pip` 命中框架所在环境；
+  Windows PATH 键大小写变体不敏感归并，envs.json 注入的变量自动继承）。
+- **`encoding`（管道编解码 codec）**：输出解码（Sanitizer 增量解码器 +
+  read_stdout 回放）与 stdin 编码共用一个 codec。默认 **`"auto"`=本机
+  原生编码**：Windows 用 `ctypes GetConsoleOutputCP()`（中文系统
+  936→gbk——不能用 `locale.getpreferredencoding`，宿主 `PYTHONUTF8=1`
+  会谎报 utf-8 而 cmd 原生输出仍是 GBK，实测踩过）；POSIX 用 locale。
+  启动返回信息写明 `stdin/stdout/stderr encoding=XXX`，auto 时附
+  「看到 ??? 乱码请显式调 encoding」提示。日志文件恒为 UTF-8（解码后
+  落盘），编码切换不影响存量日志。
+- **`no_shell`（原生直启）**：`create_subprocess_exec`（托管）/
+  `Popen(argv, shell=False)`（detach），command 改传 **argv 列表**
+  （或其 JSON 数组字符串，元素统一 str）。零引号地狱、`< > & |`
+  按字面传参（陷阱 #4 的正解）；代价是无重定向/管道/通配符语义。
+  list 未配 no_shell、字符串配了 no_shell 均报错引导。
+- **`name`（人肉标签）**：≤80 字符，`exec` 返回、`check`、`list` 摘要行、
+  通知消息头四处统一渲染 `#N「标签」`；纯展示，不影响执行与寻址。
+- **`hide_window`（Windows 压控制台窗）**：`CREATE_NO_WINDOW` +
+  STARTUPINFO `SW_HIDE`；POSIX 忽略；detach 模式无需此参数
+  （其 spawn 恒带 CREATE_NO_WINDOW，本就没有窗口）。
+- **`detach`（脱离托管）**：一次性 `subprocess.Popen`，stdio 全 DEVNULL、
+  无 reader/monitor、不进注册表、不占并发名额、宿主退出后继续运行，
+  **立即返回 OS 级 PID**（非 #N）。Windows 走
+  `CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW`（⚠️ 弃用 `DETACHED_PROCESS`：
+  完全无 console 时 PowerShell 0.3s exit 0 静默罢工、-Command 根本不执行，
+  变体矩阵实测钉死）、POSIX 走 `start_new_session`。此后
+  list/check/communicate/notice 对它全部无效，管理需按 PID 用系统命令
+  自理（`taskkill /F /T /PID` / `kill`）。
+  `background`/`timeout`/`max_output_chars`/`encoding` 在 detach 下失效。
+
+- **`shell` 枚举（default / pwsh / bash）**：命令解释器选择。
+  **行为变更**：default 不再是系统裸壳——Windows 优先 pwsh
+  （`-NoProfile -NonInteractive -Command`，powershell 5.1 兜底、再退
+  `cmd.exe /c`），POSIX 优先 bash（退 `/bin/sh`）。显式选 pwsh/bash 而机器
+  没有 → 报错引导（不静默换壳）。实现=工具层把命令包装成
+  `[shell_exe, *flags, command]` argv 走 `create_subprocess_exec`，回显
+  显示用户原文（display 不被前缀污染）；`no_shell=True` 时忽略。
+  PowerShell 语义提醒：带引号 exe 路径需 `& ` 调用运算符；`$var` 是 PS 插值。
+- **detach Windows 标志修正**：`DETACHED_PROCESS` → `CREATE_NO_WINDOW`。
+  实测钉死：完全无 console 时 PowerShell（7 与 5.1 同病）无法初始化宿主、
+  0.3s exit 0 静默罢工——detach+pwsh 组合全军覆没；CREATE_NO_WINDOW 给
+  子进程「有 console 但无窗口」，既保 detach 语义（宿主退出关控制台不连坐）
+  又让 PS 正常工作（变体矩阵 3/3 存活）。
+
+### Added（新工具）
+- **`process_tools_wait`（第 6 个工具，⏳）**：前台主动等待一个/一批后台
+  进程结束（作者点名场景：background 先干别的、快结束时收口）。
+  `wait(process_id, timeout=60, tail_lines=20)`：process_id 支持单个
+  （1/"1"/"#1"）与列表（[1,2]/JSON 串 "[1,2]"，通道防御），列表为
+  **all 语义**（全部结束才返回）。核心纪律（与前台 exec 的本质区别）：
+  **超时/被取消都只毁本次等待、绝不杀进程**（shield 共享 future 多等待者
+  安全）；已结束进程幂等即返；超时返回 error「进程 #N 仍运行中」——
+  **不带任何杀进程引导文案**（作者 W3 拍板）。detach 进程不可等待
+  （不在注册表，W4 拍板；「按 OS PID 操作系统内进程」为作者新想法暂搁置）。
+
+### Tests
+- 新增 `tests/test_exec_params.py` 36 项：env 注入/JSON串/数值转str/宿主
+  合并/非法拒绝/框架 PATH 前置钉；name 三处展示与截断；hide_window 不破坏
+  托管链；detach 返 PID 不进注册表不消耗编号/timeout 失效/工具不可见/env
+  副作用外证；encoding auto 标注与码页钉（ctypes）/显式 utf-8、gbk 双向往返
+  （断言防命令回显污染，chr 码组装）/cmd 原生 GBK 实战钉（chcp 活动代码页，
+  非 936 码页机器自动 skip）/stdin gbk 中文回显闭环/未知 codec 拒绝；
+  no_shell argv 列表、JSON 串、元字符字面量、双向误配报错引导、detach 组合；
+  shell 枚举 default=pwsh(Write-Output)/bash($(( )))/未知值拒绝/缺失不静默
+  换壳/no_shell 忽略 shell/回显不被 shell 前缀污染。
+- 新增 `tests/test_wait.py` 10 项：单进程收口、已结束幂等即返、超时 error
+  「仍运行中」+进程存活+无杀引导、批量 all、JSON 串 process_id、批量超时
+  点名分段、tail_lines=0、不存在报错、空列表拒绝、双等待者并发同收。
+- **113 passed + 4 skip**（skip 均为平台守卫：POSIX bash 专属/本机无
+  bash/本机装有 PowerShell）。
+
 ## [0.3.2] - 2026-09-05
 
 刷新判据第三轮迭代（用户实测否决 DOM 静止判据）：**发送按钮

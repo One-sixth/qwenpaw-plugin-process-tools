@@ -260,6 +260,181 @@ def parse_process_id(value) -> Tuple[Optional[int], Optional[str]]:
     return parse_int(value, "process_id")
 
 
+def parse_env(value) -> Tuple[Optional[dict], Optional[str]]:
+    """把 env 参数解析成 {str: str} 增量环境（空→None），非法给错误消息。
+
+    兼容 dict 与 JSON 对象字符串（通道字符串化防御：LLM 常把 dict 整体
+    传成字符串）；键值统一转 str——subprocess 要求如此，LLM 传
+    {"PORT": 8080} 这类数值也很常见。
+    """
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None, None
+        import json
+
+        try:
+            value = json.loads(s)
+        except ValueError:
+            return None, f"env 参数应为 dict（或 JSON 对象字符串），「{truncate_line(s, 60)}」解析不了"
+    if isinstance(value, dict):
+        cleaned = {}
+        for k, v in value.items():
+            key = str(k).strip()
+            if not key:
+                return None, "env 含空变量名"
+            cleaned[key] = str(v)
+        return cleaned or None, None
+    return None, f"env 参数应为 dict，收到「{type(value).__name__}」"
+
+
+def resolve_encoding(value) -> Tuple[str, bool, Optional[str]]:
+    """encoding 参数 → (规范化 codec 名, 是否 auto, 错误消息)。
+
+    auto/空 = 本机原生编码：Windows 取控制台输出码页（GetConsoleOutputCP，
+    中文系统 936→gbk——不能用 locale.getpreferredencoding，宿主常设
+    PYTHONUTF8=1 会让它谎报 utf-8，而 cmd 原生输出仍是 GBK）；POSIX 取
+    locale 首选编码。显式值经 codecs.lookup 校验并取规范名。
+    """
+    s = str(value or "").strip().lower()
+    if s in ("", "auto"):
+        return _auto_codec(), True, None
+    import codecs
+
+    try:
+        return codecs.lookup(s).name, False, None
+    except LookupError:
+        return "", False, f"未知 encoding「{value}」，可用值如 auto / utf-8 / gbk / cp936 / latin-1"
+
+
+def _auto_codec() -> str:
+    """auto 的实际解析：Windows 控制台码页优先，POSIX locale 兜底。"""
+    import codecs
+
+    candidates = []
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+            if cp:
+                candidates.append(f"cp{cp}")
+        except Exception:  # noqa: BLE001
+            pass
+    import locale
+
+    candidates.append(locale.getpreferredencoding(False))
+    candidates.append("utf-8")
+    for c in candidates:
+        if not c:
+            continue
+        try:
+            return codecs.lookup(c).name
+        except LookupError:
+            continue
+    return "utf-8"
+
+
+def parse_argv(value) -> Tuple[Optional[list], Optional[str]]:
+    """把 no_shell 模式的 command 解析成 argv 字符串列表。
+
+    接受 list 或 JSON 数组字符串（通道字符串化防御）；元素统一 str。
+    """
+    v = value
+    if isinstance(v, str):
+        import json
+
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return None, (
+                "no_shell=True 时 command 需为 argv 列表"
+                "（如 [\"python\", \"-c\", \"print(1)\"]）或其 JSON 数组字符串"
+            )
+    if isinstance(v, (list, tuple)) and v:
+        return [str(x) for x in v], None
+    return None, "no_shell=True 时 command 需为非空 argv 列表（或其 JSON 数组字符串）"
+
+
+def parse_process_ids(value) -> Tuple[Optional[list], Optional[str]]:
+    """把 process_id / process_ids 参数解析成去重保序的编号列表。
+
+    接受单个编号（1 / "1" / "#1"）、编号列表（或其 JSON 数组字符串，
+    通道字符串化防御）；元素逐个走 parse_int 兼容 "#N" 写法。
+    """
+    v = value
+    if isinstance(v, str):
+        s = v.strip()
+        if s.startswith("["):
+            import json
+
+            try:
+                v = json.loads(s)
+            except ValueError:
+                return None, f"process_id 参数无法解析：「{truncate_line(s, 60)}」"
+    items = list(v) if isinstance(v, (list, tuple)) else [v]
+    if not items:
+        return None, "process_id 列表为空"
+    nums = []
+    for item in items:
+        n, err = parse_int(item, "process_id")
+        if err or n is None:
+            return None, err or "process_id 无效"
+        if n not in nums:
+            nums.append(n)
+    return nums, None
+
+
+# ── shell 选择 ──────────────────────────────────────────
+
+SHELL_CHOICES = ("default", "pwsh", "bash")
+
+_PWSH_FLAGS = ["-NoProfile", "-NonInteractive", "-Command"]
+
+
+def resolve_shell_argv(spec: str) -> Tuple[Optional[list], Optional[str], Optional[str]]:
+    """shell 参数 → (argv 前缀, 实际使用的 shell 名, 错误消息)。
+
+    default：Windows 优先 pwsh（powershell 兜底、再退 cmd.exe），
+    POSIX 优先 bash（退 /bin/sh）。显式选 pwsh/bash 但找不到 → 报错
+    引导改用 default，不静默换壳。
+    """
+    import shutil
+
+    spec = str(spec or "default").strip().lower()
+    if spec not in SHELL_CHOICES:
+        return None, None, f"shell 参数应为 {' / '.join(SHELL_CHOICES)}，收到「{spec}」"
+    if os.name == "posix":
+        if spec == "pwsh":
+            exe = shutil.which("pwsh") or shutil.which("powershell")
+            if not exe:
+                return None, None, "未找到 pwsh/powershell，可改 shell=\"default\"(bash)"
+            return [exe, *_PWSH_FLAGS], "pwsh", None
+        bash = shutil.which("bash")
+        if spec == "bash":
+            if not bash:
+                return None, None, "未找到 bash，可改 shell=\"default\""
+            return [bash, "-c"], "bash", None
+        return [bash or "/bin/sh", "-c"], ("bash" if bash else "sh"), None
+    # Windows
+    if spec == "bash":
+        bash = shutil.which("bash")
+        if not bash:
+            return None, None, "未找到 bash（Git Bash?），可改 shell=\"default\"(pwsh)"
+        return [bash, "-c"], "bash", None
+    pwsh = shutil.which("pwsh") or shutil.which("powershell")
+    if spec == "pwsh":
+        if not pwsh:
+            return None, None, "未找到 pwsh/powershell，可改 shell=\"default\" 或 \"bash\""
+        return [pwsh, *_PWSH_FLAGS], "pwsh", None
+    if pwsh:
+        return [pwsh, *_PWSH_FLAGS], "pwsh", None
+    cmd = shutil.which("cmd.exe") or "cmd.exe"
+    return [cmd, "/c"], "cmd", None
+
+
 # ── 日志尾部读取 ──────────────────────────────────────────
 
 
