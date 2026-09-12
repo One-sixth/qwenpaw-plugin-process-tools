@@ -2,6 +2,77 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.4.4] - 2026-09-12
+
+notice 描述减负 + 固定双投递 + wait 列表引号容错。
+
+### Changed
+- **`process_tools_notice` 删除 `wake_agent` 参数（作者拍板方案 B）**：
+  气泡+唤醒固定双投递（`deliver` 不再收开关，`Notice` 删 `wake_agent`
+  字段）。理由：`wake_agent=False` 时 agent 自己收不到通知、行动链断
+  裂，这种自由度弊大于利；注册即想被叫醒，不想被周期叫醒就别注册周期
+  通知（`interval_seconds=0`）。非 console 频道跳过唤醒的守卫不变。
+- **docstring 重写**（240 字 → 130 字）：首句改为作者拍板语义「若要动
+  态接收后台进程状态的周期通知或结束通知，必须调用本工具注册」；新增
+  「注册后无需再用 wait 等待进程结束」防 agent 注册后挂等；砍投递机制
+  细节（气泡/唤醒/忙碌排队/通知内容清单）。已结束进程的报错引导维持
+  只指 `check`（0.4.2 裁决）。描述减负追加（同轮作者点名）：notice 删
+  「（轮询烧 token）」、wait 的 tail_lines 删「（批量收口时最省
+  token）」、list 删「运行中进程超过 5 个时…不占名额」整句（并发上限
+  list 运行时输出 `（运行中 N/5）` 自解释）——理由同理：潜在收益信息
+  不进描述，不增加决策难度。
+- **成功返回消息去掉「（wake_agent=…）」与复读句「不注册则进程结束不
+  会有任何推送」**：全局语义归 docstring，单次成功消息只报注册结果。
+- **exec 的 encoding 报告格式**（作者点名）：`encoding=gbk（auto=…）`
+  → `encoding="gbk" (auto=…)`——codec 名带双引号、加空格、全角括号
+  改半角；显式值同格式 `encoding="utf-8"`。前台/后台两分支共用
+  `enc_note` 一处拼接，测试三处断言同步。auto 提示语同步细化：
+  「若输出一堆 ??? 乱码」→「若输出很多 "??" 或 乱码」——避免 agent
+  把乱码窄化成问号堆（作者点名）。
+- **README 去蓝本化**（作者点名）：删「蓝本：《AI_MED_UI 进程工具设计》
+  （v1 = …）」整段；「三路数据流（v1 两路）」→「三路数据流」；已知限制
+  「v1 无前端 xterm 控制台（设计文档…未移植）」→「无前端 xterm 控制台」
+  ——README 不再出现内部设计文档名与 v1/v2 阶段叙述。顺带修正 wake_agent
+  删除后的失真描述：通知系统「+（可选）唤醒」→「+ 唤醒 agent（固定双投递）」。
+  复查轮扩大战果：manager/plugin/notifier/sanitizer 四模块 docstring 的
+  蓝本与 v1 引用同批清理（见「零上下文子 Agent 复查轮」节）。
+- **exec 并发上限移除（作者点名）**：删 `MAX_RUNNING_PER_SESSION = 5`
+  常量与 start 检查、list 不再显示 `N/5`；`_running_count` 方法保留
+  （测试仍用作名额语义自洽检查）。
+- **shell 默认值 default → auto（作者点名）**：Windows pwsh > powershell >
+  cmd、Linux bash > sh、**macOS zsh > bash > sh**（新增 darwin 分支，
+  本机实测从未覆盖——装机后 macOS 待验）；旧值 `"default"` 静默映射
+  为 auto（升级兼容别名，防装机升级期旧调用报错）。exec 返回信息新增
+  `shell="…"` 行报告实际使用的解释器（后台/前台/detach 三分支；
+  no_shell 直启无 shell 不报）。
+- **process_tools_list 新增 `limit` 参数（默认 10，作者点名）**：新进程
+  在前——**num 降序**实现（编号单调分配永不复用，等价创建顺序且无
+  同秒时间戳精度问题；首版误用不存在的 registered_at 字段被测试当场
+  抓住）；limit≤0 列全部，截断时提示「limit=0 看全部」。
+- **描述语义校准（作者点名）**：「主动收口」→「等待进程结束」
+  （exec/wait docstring、plugin.json、README）；env 描述显著写明
+  「传 JSON 字典」，JSON 对象字符串容错保持静默 + 外围引号剥一次
+  （同 parse_process_ids 手法）。
+- **`parse_process_ids` 外围引号容错**：LLM 偶发把 JSON 数组字符串整体
+  再包一层双引号（`"[\"1\", \"2\"]"`）→ 只剥一次最外围双引号后按原
+  逻辑解析；不递归、不扩展单引号（作者拍板：仅兼容这一种）。单个编号
+  被引号包裹（`"3"` / `"#4"`）同路受益。**wait 的 process_id 描述同步
+  删去「或 JSON 数组字符串 "[1,2]"」**——容错是潜在包容，不写进
+  agent 可见描述增加决策难度（作者拍板）；exec no_shell 的
+  command「或其 JSON 数组字符串」是声明的双形态接口，保留不动。
+
+### Tests
+- 129 → **131 passed + 4 skipped**：新增
+  `test_parse_process_ids_quoted_forms`（标准形式回归 + 剥引号目标场景
+  + 单编号引号 + 两层引号只剥一次 + 单引号数组拒绝 + 坏 JSON）、
+  `test_parse_env_quoted_json_object`（同款边界，目标场景用 json.dumps
+  构造避手写转义）、`test_list_limit_and_newest_first`（新→旧排序 +
+  limit=2 截断提示 + limit=0 全列）、`test_many_concurrent_processes`
+  （8 进程并存钉死无上限，替代删除的 test_concurrency_cap）；
+  `test_deliver_wake_routing_and_channel_guard` 删 wake_agent=False
+  段、`fake_deliver`/`_Recorder` 签名同步；`tools_schema.json` 重导出。
+
+
 ## [0.4.3] - 2026-09-05
 
 死会话数据清理：会话没了，它的计数器与日志跟着走。

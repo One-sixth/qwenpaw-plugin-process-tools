@@ -128,3 +128,20 @@ def test_parse_env_quoted_json_object():
     # 坏 JSON 仍报错
     value, err = parse_env('{"A": oops}')
     assert value is None and err
+
+
+def test_parse_process_ids_channel_double_encoded():
+    """实链路（0.4.4 冒烟抓到）：通道字符串化把 JSON 数组文本字符串再
+    编码一层，参数实际到达 '"[\\"21\\", \\"20\\"]"'（外围引号+内部转义）。
+    逐层 json.loads（最多 2 次）必须能解。"""
+    import json as _json
+
+    from utils import parse_env, parse_process_ids
+
+    inner_text = _json.dumps(["21", "20"])   # '["21", "20"]'
+    double = _json.dumps(inner_text)         # '"[\"21\", \"20\"]"'
+    assert parse_process_ids(double) == ([21, 20], None)
+    # env 同款双层
+    env_inner = _json.dumps({"A": "1"})      # '{"A": "1"}'
+    env_double = _json.dumps(env_inner)      # '"{\"A\": \"1\"}"'
+    assert parse_env(env_double) == ({"A": "1"}, None)

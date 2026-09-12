@@ -348,15 +348,42 @@ def parse_env(value) -> Tuple[Optional[dict], Optional[str]]:
         s = value.strip()
         if not s:
             return None, None
-        if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
-            # LLM 偶发把 JSON 对象字符串整体再包一层引号：剥一次即可
-            # （同 parse_process_ids 外围引号容错，仅此一种不递归）。
-            s = s[1:-1].strip()
         import json
 
-        try:
-            value = json.loads(s)
-        except ValueError:
+        # 通道/LLM 字符串化防御：参数可能被 JSON 编码一到两层（实测
+        # 双层形态 '"{\"A\": \"1\"}"'，外围引号+内部转义）。逐层 loads
+        # （最多 2 次），得到 dict 即用；否则报解析失败。
+        obj = None
+        cur = s
+        for _ in range(2):
+            if not cur or cur[0] not in '{["':
+                break
+            try:
+                decoded = json.loads(cur)
+            except ValueError:
+                # 病态变体兜底：'"{"A": "1"}"'（外围引号+内部无转义）——
+                # 手工剥一次，仅当剥完能 loads 出 dict 才接受。
+                if len(cur) >= 2 and cur[0] == '"' and cur[-1] == '"':
+                    inner = cur[1:-1].strip()
+                    if inner.startswith("{"):
+                        try:
+                            cand = json.loads(inner)
+                            if isinstance(cand, dict):
+                                obj = cand
+                                break
+                        except ValueError:
+                            pass
+                break
+            if isinstance(decoded, dict):
+                obj = decoded
+                break
+            if isinstance(decoded, str):
+                cur = decoded.strip()
+            else:
+                break
+        if obj is not None:
+            value = obj
+        else:
             return None, f"env 参数应为 dict（或 JSON 对象字符串），「{truncate_line(s, 60)}」解析不了"
     if isinstance(value, dict):
         cleaned = {}
@@ -446,17 +473,42 @@ def parse_process_ids(value) -> Tuple[Optional[list], Optional[str]]:
     v = value
     if isinstance(v, str):
         s = v.strip()
-        if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
-            # LLM 偶发把 JSON 数组字符串整体再包一层引号："[\"1\", \"2\"]"
-            # → 只剥一次最外围双引号，不递归（作者拍板：仅兼容这一种）。
-            s = s[1:-1].strip()
-        if s.startswith("["):
-            import json
+        import json
 
+        # 通道/LLM 字符串化防御：参数可能被 JSON 编码一到两层。实测通道
+        # 会把 list 参数变成 '"[\"21\", \"20\"]"'（外围引号+内部转义），
+        # 它本身是合法 JSON 字符串字面量——逐层 loads（最多 2 次）：
+        # 得到 list 直接用；得到 str 继续解；失败且以 [ 开头报专用
+        # 解析错，其余回落单编号 parse_int（'"3"' → "3" → 3）。
+        decoded = None
+        for _ in range(2):
+            if not s or s[0] not in '["':
+                break
             try:
-                v = json.loads(s)
+                decoded = json.loads(s)
             except ValueError:
-                return None, f"process_id 参数无法解析：「{truncate_line(s, 60)}」"
+                # 病态变体兜底：'"["1", "2"]"'（外围引号+内部无转义，非
+                # 合法 JSON）——手工剥一次，仅当剥完能 loads 出 list 才
+                # 接受；'""5""' 剥完不是数组仍拒绝（维持只剥一次裁决）。
+                if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+                    inner = s[1:-1].strip()
+                    if inner.startswith("["):
+                        try:
+                            cand = json.loads(inner)
+                            if isinstance(cand, list):
+                                decoded = cand
+                                break
+                        except ValueError:
+                            pass
+                if s[0] == "[":
+                    return None, f"process_id 参数无法解析：「{truncate_line(s, 60)}」"
+                break
+            if isinstance(decoded, str):
+                s = decoded.strip()
+            else:
+                break
+        if isinstance(decoded, (list, tuple, str)):
+            v = decoded
         else:
             v = s
     items = list(v) if isinstance(v, (list, tuple)) else [v]
