@@ -4,7 +4,6 @@
 
 GitHub仓库：https://github.com/One-sixth/qwenpaw-plugin-process-tools
 
-蓝本：《AI_MED_UI 进程工具设计》（v1 = subprocess + 管道，无 PTY、无前端控制台），
 核心思想是 **"进程是共享对象"**：agent 工具里的 `#N` 与日志文件指向同一个进程，
 会话内人机同一视图。
 
@@ -41,8 +40,8 @@ GitHub仓库：https://github.com/One-sixth/qwenpaw-plugin-process-tools
 
 - **会话隔离**：进程注册表 key = `(agent_id, user_id, session_id)`，
   由 QwenPaw 内核 contextvar 注入，跨会话/跨用户不可见不可操作
-- **编号 `#N`**：按会话单调分配、永不复用（0.2.1 起计数器落盘，宿主重启后继续续号，日志文件绝不混排）；每会话并发运行上限 **5**（已结束不占名额）
-- **三路数据流（v1 两路）**：512KB 环形缓冲（`read_stdout` 回放/增量续读）+
+- **编号 `#N`**：按会话单调分配、永不复用（0.2.1 起计数器落盘，宿主重启后继续续号，日志文件绝不混排）
+- **三路数据流**：512KB 环形缓冲（`read_stdout` 回放/增量续读）+
   净化日志落盘（剥 ANSI、折叠 `\r` 覆写、增量 UTF-8），
   路径 `{workspace}/process_tools_data/logs/proc_{session}_{N}.log`
 - **死会话自动清理**：宿主启动时按双判据判活——chats.json 条目 **与**
@@ -51,10 +50,10 @@ GitHub仓库：https://github.com/One-sixth/qwenpaw-plugin-process-tools
   死会话的 `counters/*.cnt` 与 `logs/proc_*.log` 立即删除。宽限期 600s
   防误杀新建会话，chats.json 不可读则整个工作区跳过；另有 30 天龄兜底清理
 - **通知系统**：完成通知幂等；周期通知间隔 ≥30s（推荐 ≥900s，省 token）；
-  投递 = `console_push_store` 通知气泡 +（可选）`/chat/task` 后台任务唤醒 agent，
+  投递 = `console_push_store` 通知气泡 + `/chat/task` 后台任务唤醒 agent（固定双投递），
   会话忙碌自动排队、空闲后送达（重试 20×30s 上限，超时会过期）。
   notice 只面向未来事件——**极短进程**（如 `sleep 5`）exec 返回时往往已结束、
-  注册必失败，直接用 `wait` 收口即可，无需挂通知
+  注册必失败，直接用 `wait` 等待即可，无需挂通知
 - **信号语义**：`send_sigint` 默认只中断主进程（`group=True` 整组）；
   `send_sigkill` 连子孙进程杀干净；前台等待被取消时尽力 kill，**绝不留孤儿**；
   应用退出钩子统一终止全部托管进程。
@@ -102,8 +101,9 @@ qwenpaw app
 
 | 平台 | spawn | sigint | sigkill |
 |------|-------|--------|---------|
-| Linux / macOS | shell 枚举包装：`bash -c`（default；回落 `/bin/sh`）经 `create_subprocess_exec` + `start_new_session` | SIGINT 主进程 / killpg 整组，**程序可捕获做优雅退出** | SIGKILL 整组 |
-| Windows | `pwsh -NoProfile -NonInteractive -Command`（default；回落 `cmd.exe /c`）经 `create_subprocess_exec` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK：⚠️ 实测**不经 CPython 信号机制**，自定义 handler 不会执行，进程以 `0xC000013A` 被 OS 终止（映射为 `killed` 状态），≈ 略轻于 sigkill 的第二档硬杀 | `taskkill /F /T` 杀树 |
+| Linux | shell 枚举包装：`bash -c`（auto；回落 `/bin/sh`）经 `create_subprocess_exec` + `start_new_session` | SIGINT 主进程 / killpg 整组，**程序可捕获做优雅退出** | SIGKILL 整组 |
+| macOS | 同 Linux，但 auto 优先 `zsh -c`（回落 bash > `/bin/sh`） | 同 Linux | 同 Linux |
+| Windows | `pwsh -NoProfile -NonInteractive -Command`（auto：pwsh > powershell，回落 `cmd.exe /c`）经 `create_subprocess_exec` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK：⚠️ 实测**不经 CPython 信号机制**，自定义 handler 不会执行，进程以 `0xC000013A` 被 OS 终止（映射为 `killed` 状态），≈ 略轻于 sigkill 的第二档硬杀 | `taskkill /F /T` 杀树 |
 
 > **Windows 想优雅退出**：用 `write_stdin` 发送约定指令（如 REPL 的 `exit()`、
 > 或程序自定义的 quit 命令），不要指望 sigint。
@@ -120,7 +120,7 @@ Windows 下 `cmd.exe` 不认单引号，命令里的 `>` `<` `&` `|` 等元字�
 
 ## 已知限制
 
-- v1 无前端 xterm 控制台（设计文档中的实时渲染层未移植）
+- 无前端 xterm 控制台
 - 唤醒通知按 console 会话投递：`/chat/task` 以 `(session_id, user_id, channel)`
   三元组全等匹配会话，非 console 频道的通知会自动跳过任务唤醒（只发气泡），
   避免误建会话

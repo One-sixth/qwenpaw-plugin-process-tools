@@ -589,3 +589,124 @@ env 三层合成公式/smart_decode 三板斧/超时 Job Object/采纳与不跟�
   上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级
   键漂移、「按 OS PID 操作任意进程」搁置、文案小候选 ×2（notice
   docstring 注 10 分钟排队上限、wait 批量全结束的边界文案）。
+
+---
+
+## notice 减负与引号容错轮（0.4.4，2026-09-12 作者逐项拍板）
+
+### wake_agent 参数删除（方案 B：彻底清理）
+- **作者拍板链**： noticing `wake_agent` 参数无用 → 固定「始终发用户可见
+  气泡，始终触发 agent 回复」→ 选方案 B（`Notice` 删字段 + `deliver`
+  删参数，不留固定 True 的死字段）。
+- **裁决理由**：`wake_agent=False` 时通知只进气泡、agent 自己不知道进
+  程结束，行动链断裂还得用户人工转述——这种自由度弊大于利；「注册周
+  期通知却不想被叫醒」自相矛盾（不想被叫醒就 `interval_seconds=0`）。
+  已知代价：周期快照（≥30s）也会唤醒 agent，靠推荐 ≥900 缓解。
+- **实现**：`Notice.wake_agent` 字段删、`deliver(mp_key, text,
+  wake_channel)` 唤醒无条件执行；**非 console 频道跳过唤醒的守卫不变**
+  （那是 wake_channel 决定的，与参数无关）。plugin.py register_tool
+  的一句话 description 不动（「唤醒处理」语义本来就成立）。
+
+### docstring 重写（240 字 → 130 字）
+- 首句=作者定稿语义：**「若要动态接收后台进程状态的周期通知或结束通
+  知，必须调用本工具注册进程状态通知」**（原「opt-in，不注册则零通知」
+  八字版被替换）。
+- 新增防挂等指引：**「注册后无需再用 wait 等待进程结束——系统会自动把
+  通知发到用户侧并唤醒 agent」**（防 agent 注册后画蛇添足挂 wait）。
+- 砍：投递机制细节（气泡/唤醒/忙碌排队/通知内容清单/自动停止）——运行
+  时自解释。已结束进程报错引导**维持只指 check**（0.4.2 裁决，勿回退
+  成 wait/check 并列）。成功返回消息去掉 `（wake_agent=…）` 与复读句
+  「不注册则进程结束不会有任何推送」（全局语义归 docstring，成功消息
+  只报注册结果——作者点名"位置多余无效"）。
+- **描述减负追加（同轮作者点名三处）**：notice 删「（轮询烧 token）」、
+  wait 的 tail_lines 删「（批量收口时最省 token）」、list 删「运行中
+  进程超过 5 个时无法再启动新进程，已结束的不占名额」整句——同理
+  「潜在收益信息不进描述，不增加决策难度」；并发上限 list 运行时输出
+  `（运行中 N/5）` 自解释。
+- **exec encoding 报告格式**（作者点名）：auto 场景原输出
+  `encoding=gbk（auto=…）`——codec 名后无空格且用全角括号；改为
+  `encoding="gbk" (auto=本机编码；…)`（带双引号+空格+半角括号），
+  显式值同格式 `encoding="utf-8"`。拼接点仅 exec.py `enc_note` 一处
+  （前台/后台两分支共用）；test_exec_params 三处断言同步（含
+  test_auto_decodes_native_gbk_cmd_output 的 gbk/cp936 双断言）。
+  auto 提示语同步细化：「若输出一堆 ??? 乱码」→「若输出很多 "??" 或
+  乱码」——避免 agent 把乱码窄化成问号堆（作者点名）。
+- **README 去蓝本化**（作者点名）：删「蓝本：《AI_MED_UI 进程工具设计》
+  （v1 = …）」段、`三路数据流（v1 两路）`→`三路数据流`、已知限制
+  「v1 无前端 xterm 控制台（设计文档…未移植）」→「无前端 xterm 控制
+  台」——README 不再出现内部设计文档名与 v1/v2 阶段叙述（README 是
+  公开文档，按代码项目身份管理规约不该引用内部设计物）。顺带修正
+  wake_agent 删除后的失真：通知系统「+（可选）唤醒」→「+ 唤醒 agent
+  （固定双投递）」。
+
+### 行为五连改（同轮作者点名，并入 0.4.4）
+- **exec 并发上限移除**：`MAX_RUNNING_PER_SESSION = 5` 常量与 start
+  检查删除，list 不再显示 `N/5`；测试 `test_many_concurrent_processes`
+  8 进程并存钉死，替代删除的 `test_concurrency_cap`。
+- **shell 默认值 default → auto**：Windows pwsh > powershell > cmd、
+  Linux bash > sh、macOS **zsh > bash > sh**（新增 darwin 分支）；
+  旧值 `"default"` 静默映射 auto（升级兼容别名）。**exec 返回新增
+  `shell="…"` 行**（后台/前台/detach 三分支；no_shell 不报）——
+  test_shell_wrap_keeps_display_clean 原断言「返回不含 pwsh」与此
+  冲突，改为断言 NoProfile 不进命令回显 + shell= 行存在。
+- **list 新增 limit 参数（默认 10）**：新→旧排序用 **num 降序**
+  （编号单调永不复用，等价创建顺序且无同秒精度问题；首版误用不存在
+  的 registered_at 被 4 个测试当场抓住——字段是 Notice 的不是
+  ManagedProcess 的）；limit≤0 全列，截断提示 limit=0。
+- **「收口」→「等待进程结束」**：exec/wait docstring、plugin.json
+  （前台主动收口(wait)→前台等待进程结束(wait)）、README；env 描述
+  显著写「传 JSON 字典」+ parse_env 外围引号剥一次容错（静默不进
+  描述，同 process_ids 裁决）；README 跨平台表拆 macOS 行。
+- 踩坑：file_tools_append 写测试字面量时 `\"` 经 JSON 层失真成
+  `\\"`（Python 内容变成字面反斜杠+引号），parse_env 目标场景断言
+  改用 `'"' + json.dumps(...) + '"'` 构造，绕开转义地狱。
+
+### 零上下文子 Agent 复查轮（2026-09-12，发布前终审）
+- **范式**：无上下文 spawn_subagent 只读权限（读类工具+跑测试），双盲
+  任务书只给改动主题清单不给裁决结论；A–H 八项核查全部验证通过，
+  实测复核 131 passed + 4 skipped 与 CHANGELOG 一致，结论「可发布」。
+- **复查抓到并已修**：
+  ① 缺陷×2：manager.py 模块 docstring 与 start docstring 残留「并发
+  上限 5」文字（改代码漏 docstring 的典型面）；
+  ② 顺带发现：manager.py/plugin.py/notifier.py/sanitizer.py 四个模块
+  docstring 仍引用《AI_MED_UI 进程工具设计》与 v1 阶段字样（README
+  去蓝本化时只清了 README）——全部清理，技术教训文字保留；plugin.py
+  「注册 5 个工具」顺手修正为 6；
+  ③ 可疑×1：test_tools 注释残留 registered_at 字段名（首版遗物）→
+  改为「编号单调分配」；测试名 test_shell_default_is_* →
+  test_shell_auto_is_*；
+  ④ 建议×1采纳：README Windows 行补 powershell 中间档
+  （auto：pwsh > powershell，回落 cmd.exe /c）。
+- **复查裁决不修（留档）**：limit 显式传 null → 列全部（parse_int(None)
+  返回 None 的自然结果，schema 默认 10 下 agent 不可达，无害容错不进
+  描述）；_running_count 无生产调用者但测试仍用（有意保留已注明）；
+  exec 超时错误分支不带 shell/encoding 行（非本轮引入，聚焦超时本身）；
+  notifier.py:149 deliver docstring 保留「0.4.4 删除 wake_agent」变更
+  注释（防后人疑惑，非引用）。
+- 修复后复跑：manager/notifier_wake/sanitizer/tools 四模块
+  60 passed + 1 skipped；代码面 AI_MED_UI/上限5/收口/wake_agent
+  残留 grep 归零（仅存 notifier.py:149 变更注释）。
+- 顺带核销观察项③之一：notice docstring 不再需要「10 分钟排队上限」
+  注记（排队机制整体移出 docstring）。
+
+### parse_process_ids 外围引号容错（作者点名，仅此一种）
+- **场景**：agent 偶发把 JSON 数组字符串整体再包一层双引号
+  （`"["1", "2"]"`），原逻辑 `startswith("[")` 判不上直接报错。
+- **修**（utils.py）：strip 后若两端都是 `"` → **只剥一次**最外围双
+  引号再走原逻辑；剥完不以 `[` 开头则按单编号 parse_int（`"3"`/`"#4"`
+  同路受益）。**不递归**（`""5""` 剥一次后 `"5"` 被 parse_int 拒绝）、
+  **不扩展单引号**（`"['1','2']"` 剥完 json.loads 仍失败）——作者明
+  确「只额外兼容这种情况」，测试用例钉死全部边界。**wait 的
+  process_id 描述同步删去「或 JSON 数组字符串 "[1,2]"」**——容错是
+  潜在包容，不进 agent 可见描述（作者拍板：不要增加决策难度）；
+  exec no_shell command 的「或其 JSON 数组字符串」是声明的双形态
+  接口，保留。
+
+### 测试与文档
+- 128 → **129 passed + 4 skip**（test_utils.py 新增
+  `test_parse_process_ids_quoted_forms` 9 断言；test_notifier_wake /
+  test_tools 的 fake deliver 签名与 wake_agent=False 用例同步删除）。
+- tools_schema.json 重导出（notice 删 wake_agent property、新
+  description）；CHANGELOG [0.4.4]、plugin.json 0.4.4。
+- **未装机**：待作者 commit + force 重装 + 重启后，装机侧 description
+  才会更新（当前装机 0.4.3 仍是旧 wake_agent 面貌）。

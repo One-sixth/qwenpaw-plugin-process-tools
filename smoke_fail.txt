@@ -1,0 +1,38 @@
+.......FFF                                                               [100%]
+================================== FAILURES ===================================
+_____________________ test_parse_process_ids_quoted_forms _____________________
+tests\test_utils.py:93: in test_parse_process_ids_quoted_forms
+    assert parse_process_ids('"["1", "2"]"') == ([1, 2], None)
+E   assert (None, 'proce...["1", "2"]"銆?) == ([1, 2], None)
+E     
+E     At index 0 diff: None != [1, 2]
+E     Use -v to get more diff
+______________________ test_parse_env_quoted_json_object ______________________
+tests\test_utils.py:117: in test_parse_env_quoted_json_object
+    assert parse_env('{"A": "1"}') == ({"A": "1"}, None)
+E   assert (None, 'env 鍙?..": "1"}銆嶈В鏋愪笉浜?) == ({'A': '1'}, None)
+E     
+E     At index 0 diff: None != {'A': '1'}
+E     Use -v to get more diff
+________________ test_parse_process_ids_channel_double_encoded ________________
+tests\test_utils.py:147: in test_parse_process_ids_channel_double_encoded
+    assert parse_env(env_double) == ({"A": "1"}, None)
+E   assert (None, 'env 鍙?.."1\\"}"銆嶈В鏋愪笉浜?) == ({'A': '1'}, None)
+E     
+E     At index 0 diff: None != {'A': '1'}
+E     Use -v to get more diff
+============================== warnings summary ===============================
+..\..\..\Software\miniconda3\envs\qwenpaw\Lib\site-packages\_pytest\cacheprovider.py:469
+  D:\Software\miniconda3\envs\qwenpaw\Lib\site-packages\_pytest\cacheprovider.py:469: PytestCacheWarning: could not create cache path D:\Data\github_repo\qwenpaw-plugin-process-tools\.pytest_cache\v\cache\nodeids: [WinError 5] 鎷掔粷璁块棶銆? 'D:\\Data\\github_repo\\qwenpaw-plugin-process-tools\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+..\..\..\Software\miniconda3\envs\qwenpaw\Lib\site-packages\_pytest\cacheprovider.py:423
+  D:\Software\miniconda3\envs\qwenpaw\Lib\site-packages\_pytest\cacheprovider.py:423: PytestCacheWarning: could not create cache path D:\Data\github_repo\qwenpaw-plugin-process-tools\.pytest_cache\v\cache\lastfailed: [WinError 5] 鎷掔粷璁块棶銆? 'D:\\Data\\github_repo\\qwenpaw-plugin-process-tools\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/lastfailed", self.lastfailed)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_utils.py::test_parse_process_ids_quoted_forms - assert (Non...
+FAILED tests/test_utils.py::test_parse_env_quoted_json_object - assert (None,...
+FAILED tests/test_utils.py::test_parse_process_ids_channel_double_encoded - a...
+3 failed, 7 passed, 2 warnings in 0.21s
