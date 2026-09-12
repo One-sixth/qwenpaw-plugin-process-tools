@@ -6,9 +6,9 @@
 
 ## 当前状态速览（2026-09-12）
 
-- **版本**：v0.4.4（未发布尾段）。作者已自行 commit `4fb3c76`（行为五连改）+ `66bb3ac`（Release 0.4.4）；工作区尚有未提交：CHANGELOG Tests 段修正、MEMORY 追加、README/AGENTS.md/test_utils 措辞、`tools/list.py` 标点、`utils.py` 双层防御、smoke_fail.txt/smoke_parse.py 删除。
-- **测试**：**132 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
-- **装机**：git 工作树方式，装机 py 已同步 0.4.4 并实测通过；plugin.json/README 等文档待作者下次同步。
+- **版本**：v0.5.0（0.5.0 已实施待发布）。历史：作者 commit `4fb3c76`（行为五连改）+ `66bb3ac`（Release 0.4.4）。**0.5.0 新增**（2026-09-12 当日闭环）：messenger.py 信使路由（非 console 通知→agent 回合+回复送回频道）+ notifier 分流改造，见「观察项与待办」0.5.0 条目。
+- **测试**：**145 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **装机**：git 工作树方式，装机 py 目前=0.4.4；0.5.0 新增 messenger.py + notifier.py/plugin.json/README/CHANGELOG 改动**待同步装机目录 + 作者重启 QwenPaw** 后生效并 wecom 实机冒烟。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
 ---
@@ -123,20 +123,34 @@
 
 ## 观察项与待办
 
-- **0.4.5 候选：非 console 频道通知投递**（2026-09-12 调查定稿，作者拍板下版做）：
-  现状=非 console 会话（dingtalk/feishu/qq…）注册的通知**完全静默丢失**——
-  气泡写 console_push_store 是死信（该 session 无网页消费），唤醒被
-  wake_channel 守卫跳过（/console/chat/task 三元组全等匹配 console chat，
-  查不到静默新建=幽灵，0.1.1 实锤故保守跳过）。
-  **官方路径已找到**：`POST /api/messages/send` → `channel_manager.send_text`
-  （cli/channels_cmd.py 的 `channels send` 同款端点；to_handle_from_target
-  把三元组转频道句柄；内核注释明说是 cron task_type='text' 的同款机制）。
-  方案：deliver 非 console 分支改走 messages/send（快照四要素
-  agent_id/user_id/session_id/wake_channel 齐备）；channel 未配置→报
-  「通知❌(频道未配置)」；console 路径不动。**边界**：messages/send 是
-  单向推送不触发 agent 回合——IM 收到通知但无「自动处理」，用户回复才触发，属合理降级。改动约 20 行+测试。
+- **0.5.0 已实施：IM 信使（非 console 频道通知投递）**（2026-09-12 调查→实弹→落地，当日闭环）：
+  **演进**：原 0.4.5 候选方案 messages/send（单向推送，作者否决——要
+  agent 回复）→ 三方法调查 → 方法 1 实测（`/console/chat/task` +
+  payload `channel` 透传 wecom 三元组：agent 真跑 15s、WebUI 会话可见、
+  **不造幽灵**——但 stream_one 无频道路由，IM 收不到）→ 方法 3 落地
+  「信使路由」。
+  **实现**：messenger.py `run_wake(workspace, channel, user_id,
+  session_id, text)` = cron agent job 同款链路——get_channel 预检
+  （未配置分类报错）→ get_or_create_chat 幂等取 chat（三元组全等）→
+  task_tracker.get_status(chat.id) 忙检 → workspace.stream_query(req)
+  （dict 形态，request_context.suppress_console_push=True）→
+  channel_manager.send_event 逐事件转发（基类只放行 message+Completed，
+  base.py:2302；wecom 底层 aibot WS SEND_MSG 主动推送，无 webhook
+  过期问题）。handler = POST /api/process-tools/wake-channel
+  （get_agent_for_request 按 X-Agent-Id 路由 workspace；忙→409）；
+  notifier 侧 _wake_via_messenger（409→30s×20 重试，同 console 唤醒）+
+  _submit_messenger_task（httpx，MESSENGER_HTTP_TIMEOUT=330s >
+  端点 WAKE_AGENT_TIMEOUT_SECONDS=300s）。deliver 分流：console=
+  气泡+chat/task 双投递不动；非 console=无气泡（死信废弃）+信使，
+  报告「IM唤醒✅/❌(原因)」。
+  **关键内核锚点**：chat/task 的 payload channel 字段透传（console.py
+  `_extract_session_and_payload`）；get_agent_for_request 优先级含
+  X-Agent-Id header（agent_context.py:54）；stream_query 无并发保护
+  （忙检必须插件自己做）；cron executor.py 是 stream_query+send_event
+  的官方范本。全量 145 passed + 4 skipped。
+  **待实机冒烟**：wecom 真实通知触发（装机重启后验证手机收到）。
 - **macOS zsh 分支未实机验证**（Linux 已 Debian 37/37 核销，同 POSIX 路径风险低）。
 - 唤醒重试 20×30s 上限是否放宽——等真实场景反馈。
 - 远期组：PTY 双后端、`qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置。
 - 多 agent 真机并发隔离未测（单测+子代理双向不可见已过）。
-- 通知唤醒最终形态：固定双投递已实测闭环（#37 气泡+唤醒消息自动到达）。
+- 通知唤醒最终形态：console=固定双投递（#37 实测闭环）；非 console=信使模式（0.5.0，agent 回合+回复送回频道，单测闭环，**待装机重启后 wecom 实机冒烟**）。

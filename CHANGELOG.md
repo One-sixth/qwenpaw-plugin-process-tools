@@ -2,6 +2,36 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.5.0] - 2026-09-12
+
+IM 信使：非 console 频道通知从「静默丢失」到「agent 回合 + 回复送达 IM」。
+
+### Added
+- **信使路由 `messenger.py` + `POST /api/process-tools/wake-channel`**：
+  非 console 会话（wecom/dingtalk/feishu/qq…）注册的通知不再静默丢失。
+  端点内完成「忙检 → agent 回合（`workspace.stream_query`，cron agent
+  job 同款 dict 形态）→ 回复事件经 `channel_manager.send_event` 送回
+  注册频道」。回复落 session 文件（WebUI 可见）+ IM 收到（wecom 底层
+  走 aibot WS `SEND_MSG` 主动推送，无需回调帧）。忙碌返回 409。
+- **`Notifier._wake_via_messenger` / `_submit_messenger_task`**：
+  非 console 投递走信使端点；409 忙碌与 console 唤醒同款 30s×20 重试；
+  `X-Agent-Id` 携带注册时 agent 维度（多 agent 不串台）；
+  `MESSENGER_HTTP_TIMEOUT=330s`（> 端点内 agent 回合上限 300s）。
+
+### Changed
+- **`deliver` 投递按频道分流**：console 会话维持「气泡+chat/task 唤醒」
+  双投递不变；非 console 会话**不再写 console_push_store**（死信——该
+  session 无网页消费），报告项由「唤醒⏭️」变为「IM唤醒✅/❌(原因)」。
+- 调查实证（方法 1 预研）：`/console/chat/task` 的 payload `channel`
+  字段可透传真实频道名、三元组全等命中现有会话（不造幽灵），但回复无
+  频道路由——因此信使改走 stream_query + send_event 组合。
+
+### Tests
+- 新增 `tests/test_messenger.py`（8 例：req 形态保真/忙检短路/频道缺失
+  短路/agent_done 语义/超时/参数校验）+ `test_notifier_wake.py` 增补
+  5 例（信使 payload/header、409 映射、重试语义、失败原因透传）；全量
+  145 passed + 4 skipped。
+
 ## [0.4.4] - 2026-09-12
 
 notice 描述减负 + 固定双投递 + wait 列表引号容错。
