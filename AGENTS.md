@@ -2,7 +2,6 @@
 
 QwenPaw 增强多进程管理插件。注册 6 个 Agent 工具，提供托管后台进程、
 会话隔离、stdin/stdout 交互、信号控制与通知系统。
-蓝本《AI_MED_UI 进程工具设计》v1（subprocess + 管道，无 PTY/无前端）。
 
 ## 快速导航
 
@@ -23,14 +22,14 @@ QwenPaw 增强多进程管理插件。注册 6 个 Agent 工具，提供托管�
 | `tools/notice.py` | process_tools_notice（完成/周期通知注册） |
 | `show_tool_schema.py` | 工具 schema 展示/导出脚本（生成 tools_schema.json） |
 | `docs/` | 深度调研归档（框架 execute_shell_command 调查报告） |
-| `tests/` | 116 个 pytest 测试（qwenpaw 环境运行） |
+| `tests/` | 136 个 pytest 用例（132 passed + 4 platform-skip，qwenpaw 环境运行） |
 
 ## 6 个工具清单
 
 1. `process_tools_exec` — 启动托管进程（前台等待 / 后台即返 / detach 脱离）
 2. `process_tools_list` — 本会话全部进程一览
 3. `process_tools_check` — 单进程状态 + 输出日志尾部
-4. `process_tools_wait` — 前台主动等一个/一批进程结束（all 语义，超时不杀）
+4. `process_tools_wait` — 前台等待一个/一批进程结束（all 语义，超时不杀）
 5. `process_tools_communicate` — stdin 写入 / stdout 环形缓冲增量读 / sigint / sigkill
 6. `process_tools_notice` — 注册完成/周期通知（气泡 + 唤醒 agent）。
    时态三分：notice 只管**未来事件**（仅运行中可注册，已结束→error），

@@ -81,20 +81,21 @@ def test_session_token_cross_process_stable(tmp_dir):
 
 def test_parse_process_ids_quoted_forms():
     """LLM 偶发把 JSON 数组字符串整体再包一层双引号：
-    只剥一次最外围双引号后按原逻辑解析（作者拍板：仅兼容这一种）。"""
+    逐层 json.loads（最多 2 次）+ 病态变体受限兜底（作者拍板：不扩展
+    单引号，双层引号仍拒绝）。"""
     from utils import parse_process_ids
 
     # 标准形式不回归
     assert parse_process_ids([1, "2"]) == ([1, 2], None)
     assert parse_process_ids("[1, 2]") == ([1, 2], None)
     assert parse_process_ids('["1", "#2"]') == ([1, 2], None)
-    # 外围多包一层双引号 → 剥一次后正常解析（目标场景）
+    # 外围多包一层双引号 → 逐层 loads 正常解析（目标场景）
     assert parse_process_ids('"[1, 2]"') == ([1, 2], None)
     assert parse_process_ids('"["1", "2"]"') == ([1, 2], None)
-    # 单个编号被引号包裹 → 剥一次后按单编号接受
+    # 单个编号被引号包裹 → 逐层 loads 后按单编号接受
     assert parse_process_ids('"3"') == ([3], None)
     assert parse_process_ids('"#4"') == ([4], None)
-    # 只剥一次：两层引号剥掉外层后不再递归 → parse_int 拒绝
+    # 两层引号剥到最后不是数组/编号 JSON → parse_int 拒绝
     value, err = parse_process_ids('""5""')
     assert value is None and err
     # 单引号数组不在兼容范围（只做双引号）：剥完 json.loads 仍失败

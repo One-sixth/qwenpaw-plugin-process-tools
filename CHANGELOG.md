@@ -54,17 +54,22 @@ notice 描述减负 + 固定双投递 + wait 列表引号容错。
   「传 JSON 字典」，JSON 对象字符串容错保持静默 + 外围引号剥一次
   （同 parse_process_ids 手法）。
 - **`parse_process_ids` 外围引号容错**：LLM 偶发把 JSON 数组字符串整体
-  再包一层双引号（`"[\"1\", \"2\"]"`）→ 只剥一次最外围双引号后按原
-  逻辑解析；不递归、不扩展单引号（作者拍板：仅兼容这一种）。单个编号
-  被引号包裹（`"3"` / `"#4"`）同路受益。**wait 的 process_id 描述同步
+  再包一层双引号（`"[\"1\", \"2\"]"`）→ **逐层 json.loads（最多 2 次）**
+  解析（实链路实测通道字符串化是「外围引号+内部转义」的双层编码，
+  单次剥引号不够——冒烟轮发现后升级为逐层 loads + 病态变体受限
+  兜底）；不递归、不扩展单引号（作者拍板：仅兼容这一种）。单个编号
+  被引号包裹（`"3"` / `"#4"`）同路受益。`parse_env` 同款双层防御。
+  **wait 的 process_id 描述同步
   删去「或 JSON 数组字符串 "[1,2]"」**——容错是潜在包容，不写进
   agent 可见描述增加决策难度（作者拍板）；exec no_shell 的
   command「或其 JSON 数组字符串」是声明的双形态接口，保留不动。
 
 ### Tests
-- 129 → **131 passed + 4 skipped**：新增
+- 129 → **132 passed + 4 skipped**：新增
   `test_parse_process_ids_quoted_forms`（标准形式回归 + 剥引号目标场景
   + 单编号引号 + 两层引号只剥一次 + 单引号数组拒绝 + 坏 JSON）、
+  `test_parse_process_ids_channel_double_encoded`（实链路双层编码
+  回归，json.dumps 嵌套构造与通道产物逐字符一致）、
   `test_parse_env_quoted_json_object`（同款边界，目标场景用 json.dumps
   构造避手写转义）、`test_list_limit_and_newest_first`（新→旧排序 +
   limit=2 截断提示 + limit=0 全列）、`test_many_concurrent_processes`

@@ -33,9 +33,10 @@ async def process_tools_list(limit: int = 10):
     ordered = sorted(procs, key=lambda m: m.num, reverse=True)
     total = len(ordered)
     shown = ordered[:lmt] if (lmt is not None and lmt > 0) else ordered
-    header = f"本会话共 {total} 个进程（运行中 {running}）："
+    header = f"本会话共 {total} 个进程（运行中 {running}）"
     if len(shown) < total:
         header += f"，显示最新 {len(shown)} 个（limit=0 看全部）"
+    header += "："
     lines = [header]
     lines.extend(m.summary_line() for m in shown)
     return make_success("\n".join(lines))

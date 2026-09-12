@@ -1,131 +1,102 @@
 # Process Tools — QwenPaw 增强多进程管理插件
 
-**增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、stdin/stdout 交互、信号控制、完成/周期通知。**
+让 QwenPaw Agent 具备完整的**后台进程管理能力**：启动、查看、等待、交互、通知——长任务不再阻塞对话。
 
-GitHub仓库：https://github.com/One-sixth/qwenpaw-plugin-process-tools
+GitHub 仓库：https://github.com/One-sixth/qwenpaw-plugin-process-tools
 
-核心思想是 **"进程是共享对象"**：agent 工具里的 `#N` 与日志文件指向同一个进程，
-会话内人机同一视图。
+## 解决什么问题
 
-## 功能概览（6 个工具）
+QwenPaw 内置的 `execute_shell_command` 是为「快速命令」设计的，跑长任务时会遇到：
 
-| 工具 | 功能 |
-|------|------|
-| `process_tools_exec` | 启动托管 shell 进程。前台等待返回完整净化输出（超时自动杀进程），或后台立即返回编号 `#N`。支持 `env` 增量环境变量、`name` 标签、`hide_window`（Windows 隐窗）、`detach`（脱离托管只回 OS PID） |
-| `process_tools_list` | 列出本会话全部进程（编号/状态/退出码/时长/命令） |
-| `process_tools_check` | 查进程状态、退出码、运行时长、输出日志尾部与路径 |
-| `process_tools_wait` | 前台主动等待一个/一批后台进程结束（all 语义；超时只报「仍运行中」不杀进程） |
-| `process_tools_communicate` | 与进程交互：`write_stdin` / `read_stdout`（环形缓冲增量读）/ `send_sigint` / `send_sigkill` |
-| `process_tools_notice` | 注册完成/周期通知（opt-in，通知以用户消息级别送达：气泡 + 唤醒 agent）。只面向未来事件——仅运行中进程可注册，已结束返回错误（结果用 `check` 拿） |
+- **前台阻塞**：命令没跑完，agent 干不了别的，你只能干等；
+- **超时即杀**：到点进程被终止，前功尽弃，且 agent 与进程彻底失联；
+- **输出一次性返回**：大输出挤占上下文，中途进度不可见；
+- **无进程概念**：命令一结束（或一被杀）就什么都查不到了，无法跟进。
 
-## 前端伴生能力（0.2.0 引入，0.3.2 三轮迭代定稿）
+如果你只想跑 `pip install`、`git status`，内置命令足够。但当你需要——
 
-- **及时自动刷新**：每 3s 轮询状态端点
-  `GET /api/process-tools/chat-status?chat_id=…`（后端 `running`/`idle`
-  + `last_run_at` run 身份键），并检测本页发送按钮的
-  `…actions-btn-loading-button` 态（发出消息起覆盖整个 run，含等待
-  吐字期——「页面正在展示生成」的精确 UI 信号）。
-  **后端 running ∧ 本页非 loading → 刷新**——SPA 冷启动进入运行中
-  会话原生 reconnect 接上进行中的 SSE 流，用户全程看到 agent"打字"；
-  每个 run 对本页至多一次接管刷新 + 一次落沿补看（sessionStorage run
-  级标记），**物理杜绝连环闪**；正在对话的活跃页永不被打扰。
-  输入框草稿由宿主 localStorage 自动存取，刷新不丢；只管理
-  `/chat/<UUID>` 页面。该缺口非 process-tools 独有，cron 通知、
-  跨 agent 提交同样受益。
-- 迭代史（详见 CHANGELOG）：文件指纹（太晚+误刷）→ DOM 动静
-  MutationObserver（等待吐字期误判活跃页）→ **按钮 loading × run 键**
-  终稿。
+- 跑一个 10 分钟的模型训练，期间继续和 agent 聊别的；
+- 启动一个开发服务器 / REPL / watch 进程，随时写指令、读输出；
+- 长任务结束时 agent **自动收到通知并汇报结果**，不用反复问「跑完没」；
+- 同时挂着多个任务，哪个完成了一眼看清；
 
-## 核心机制
+——装这个插件。
 
-- **会话隔离**：进程注册表 key = `(agent_id, user_id, session_id)`，
-  由 QwenPaw 内核 contextvar 注入，跨会话/跨用户不可见不可操作
-- **编号 `#N`**：按会话单调分配、永不复用（0.2.1 起计数器落盘，宿主重启后继续续号，日志文件绝不混排）
-- **三路数据流**：512KB 环形缓冲（`read_stdout` 回放/增量续读）+
-  净化日志落盘（剥 ANSI、折叠 `\r` 覆写、增量 UTF-8），
-  路径 `{workspace}/process_tools_data/logs/proc_{session}_{N}.log`
-- **死会话自动清理**：宿主启动时按双判据判活——chats.json 条目 **与**
-  真实会话文件（`sessions/<channel>/<uid>_<sid>.json`）双存在才算活
-  （UI 删 chat 只删索引不删文件，手动删文件只留索引，任一死法都要认）；
-  死会话的 `counters/*.cnt` 与 `logs/proc_*.log` 立即删除。宽限期 600s
-  防误杀新建会话，chats.json 不可读则整个工作区跳过；另有 30 天龄兜底清理
-- **通知系统**：完成通知幂等；周期通知间隔 ≥30s（推荐 ≥900s，省 token）；
-  投递 = `console_push_store` 通知气泡 + `/chat/task` 后台任务唤醒 agent（固定双投递），
-  会话忙碌自动排队、空闲后送达（重试 20×30s 上限，超时会过期）。
-  notice 只面向未来事件——**极短进程**（如 `sleep 5`）exec 返回时往往已结束、
-  注册必失败，直接用 `wait` 等待即可，无需挂通知
-- **信号语义**：`send_sigint` 默认只中断主进程（`group=True` 整组）；
-  `send_sigkill` 连子孙进程杀干净；前台等待被取消时尽力 kill，**绝不留孤儿**；
-  应用退出钩子统一终止全部托管进程。
-  ⚠️ 已知行为：进程退出状态回收以**输出完整为先**——若被托管进程派生了
-  继承 stdout 管道的后台孙进程（如 `os.system("sleep 100 &")`），即使主进程
-  已退出，状态仍显示 running，直到孙进程也结束（管道 EOF）才回收终态；
-  sigkill 走 killpg 整组，随后记录的退出码是主进程的真实码
-- **超时自解释**：前台超时返回"输出末尾 20 行 + 加大 timeout / background=True 建议 + 完整日志路径"
-- **`env` 增量环境变量**：在 `os.environ` 之上叠加、只对本进程生效（subprocess 的
-  env 是全量替换语义，代码里先并入宿主环境再覆盖）；兼容 dict 与 JSON 字符串（通道
-  字符串化防御），数值自动转 str
-- **`detach` 脱离托管**：`subprocess.Popen` 一次性 spawn，stdio 全 DEVNULL、无 reader/
-  monitor、不进注册表、不占并发名额、宿主退出不被清理，返回 **OS 级 PID**（非 `#N`）。
-  Windows 用 `CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW`（⚠️ 不能 `DETACHED_PROCESS`：
-  无 console 时 PowerShell 静默 exit 0 罢工），POSIX 用 `start_new_session`。之后管理交系统命令按
-  PID 自理；本插件的 list/check/communicate/notice 对它全部无效
-- **`name` 标签**：`exec`/`check`/`list`/通知消息头统一渲染 `#N「标签」`，纯展示
-- **`encoding` 编解码 codec**：输出解码与 stdin 编码共用；默认 `auto`=本机原生
-  编码（Windows 取控制台码页 `GetConsoleOutputCP`——宿主 `PYTHONUTF8=1` 会让
-  locale 谎报 utf-8，别用 `getpreferredencoding` 替代）。启动返回写明
-  `encoding=XXX`，乱码就显式传 `utf-8`/`gbk`。净化日志恒 UTF-8 落盘（解码在
-  前、落盘在后），环形缓冲存原始字节（编码无关）
-- **`no_shell` 原生直启**：command 传 argv 列表（或 JSON 数组字符串），
-  `create_subprocess_exec` 不经 shell——零引号地狱、元字符按字面传参；
-  无重定向/管道/通配符语义（需要就自己套一层 shell 命令字符串）
+## 六个工具
+
+| 工具 | 干什么 |
+|------|--------|
+| `process_tools_exec` | 启动进程：前台等待结果 / 后台立即返回编号 / `detach` 完全脱离托管 |
+| `process_tools_list` | 本会话全部进程一览（编号、状态、退出码、时长、命令） |
+| `process_tools_check` | 查单个进程状态 + 输出日志尾部 |
+| `process_tools_wait` | 等待一个/一批进程结束（超时只报「仍运行中」，绝不杀进程） |
+| `process_tools_communicate` | 与进程交互：写入 stdin、增量读 stdout、发中断/强杀 |
+| `process_tools_notice` | 注册完成/周期通知：进程结束时气泡提醒 + 自动唤醒 agent 处理 |
+
+## 相比内置命令
+
+| 能力 | 内置 `execute_shell_command` | process-tools |
+|------|------------------------------|---------------|
+| 执行方式 | 仅前台，阻塞对话 | 前台 / 后台托管 / 脱离托管 |
+| 长任务 | 超时即杀，无法跟进 | 后台持续运行，随时查状态、读输出 |
+| 等待收口 | 无 | `wait` 单个/批量等待，超时不杀 |
+| 完成通知 | 无 | `notice` 气泡 + 自动唤醒 agent，长任务零轮询 |
+| 进程交互 | 无 | stdin 写入 / stdout 环形缓冲增量读 |
+| 多进程 | 无概念 | `#N` 编号管理（永不复用），批量等待与操作 |
+| 大输出 | 全量挤进上下文 | 净化日志落盘，按需读尾部（省 token） |
+| 进程终止 | 仅超时自动杀 | `sigint` / `sigkill` 精确控制（杀整棵进程树） |
+
+## 典型用法
+
+**长任务 + 完成通知**——对 agent 说「后台跑 `python train.py`，完成后通知我」：
+
+```
+agent: process_tools_exec("python train.py", background=True)   → 进程 #1
+       process_tools_notice(1)
+（agent 继续陪你干别的……训练结束时你收到通知，agent 被唤醒汇报结果）
+```
+
+**多任务并行收口**——挂三个任务，全部结束后一次性汇报：
+
+```
+agent: process_tools_wait("[1, 2, 3]")   ← 全部结束才返回（超时不杀）
+```
+
+**交互式进程**——启动 REPL / 数据库客户端，随时发指令、增量读输出：
+
+```
+agent: process_tools_exec("python", no_shell=True, background=True)
+       process_tools_communicate(2, action="write_stdin", text="print(6*7)")
+       process_tools_communicate(2, action="read_stdout")
+```
+
+**前端伴生（自动刷新）**：agent 被通知唤醒在后台干活时，已打开的 QwenPaw 页面会自动刷新一次并接上实时输出流——你不用手动刷新页面就能看到 agent 的回复直播。零配置，装插件即生效。
 
 ## 安装
 
 ```bash
-# 安装插件（QwenPaw 离线时执行）
 qwenpaw plugin install /path/to/qwenpaw-plugin-process-tools
-
-# 启动 QwenPaw
 qwenpaw app
 ```
 
-> 无任何外部 pip 依赖（纯标准库 + QwenPaw 自带 agentscope）。
-> 安装后工具默认启用，无需额外配置。
->
-> ⚠️ `qwenpaw plugin install <URL>` 仅支持 **zip 归档**，直接给 GitHub 仓库
-> URL 会报 `File is not a zip file`（QwenPaw 安装器行为）。Git 仓库需先
-> `git clone` 到本地再按本地路径安装。
+> - 无任何外部 pip 依赖（纯标准库 + QwenPaw 自带模块），装完即用。
+> - ⚠️ `qwenpaw plugin install <URL>` 仅支持 **zip 归档**；Git 仓库请先 clone 到本地再按路径安装。
+> - 依赖 QwenPaw 2.0 – 2.3。
 
-## 跨平台说明
+## 跨平台行为
 
-| 平台 | spawn | sigint | sigkill |
-|------|-------|--------|---------|
-| Linux | shell 枚举包装：`bash -c`（auto；回落 `/bin/sh`）经 `create_subprocess_exec` + `start_new_session` | SIGINT 主进程 / killpg 整组，**程序可捕获做优雅退出** | SIGKILL 整组 |
-| macOS | 同 Linux，但 auto 优先 `zsh -c`（回落 bash > `/bin/sh`） | 同 Linux | 同 Linux |
-| Windows | `pwsh -NoProfile -NonInteractive -Command`（auto：pwsh > powershell，回落 `cmd.exe /c`）经 `create_subprocess_exec` + `CREATE_NEW_PROCESS_GROUP` | CTRL_BREAK：⚠️ 实测**不经 CPython 信号机制**，自定义 handler 不会执行，进程以 `0xC000013A` 被 OS 终止（映射为 `killed` 状态），≈ 略轻于 sigkill 的第二档硬杀 | `taskkill /F /T` 杀树 |
+| 平台 | 默认 shell | sigint | sigkill |
+|------|-----------|--------|---------|
+| Linux | `bash -c`（回落 `/bin/sh`） | 可捕获，程序能优雅退出 | SIGKILL 整组 |
+| macOS | `zsh -c`（回落 bash > `/bin/sh`） | 同 Linux | 同 Linux |
+| Windows | `pwsh`（回落 powershell > `cmd.exe /c`） | ⚠️ 不经信号机制，≈第二档硬杀，优雅退出请用 `write_stdin` 约定指令 | `taskkill /F /T` 杀树 |
 
-> **Windows 想优雅退出**：用 `write_stdin` 发送约定指令（如 REPL 的 `exit()`、
-> 或程序自定义的 quit 命令），不要指望 sigint。
-
-⚠️ **无 TTY**：进度条/TUI 程序按普通管道输出（一般会自行降级）；
-Windows 下 `cmd.exe` 不认单引号，命令里的 `>` `<` `&` `|` 等元字符需自行按目标 shell 规则转义。
-
-## 依赖的 QwenPaw 内核能力（2.0 – 2.3）
-
-- `qwenpaw.app.agent_context`：会话 contextvar（请求期由 ContextVarsSetupHook 注入）
-- `qwenpaw.app.console_push_store`：通知气泡
-- `qwenpaw.agents.tools.agent_management`：本地 API 客户端（唤醒 agent 走 `/console/chat/task`）
-- 治理集成：`tool_type="shell"`，`process_tools_exec` 的 `target_param="command"`
+> Windows 下 `cmd.exe` 不认单引号，`> < & |` 等元字符需自行转义（或让 agent 用 `no_shell=True` 原生直启绕开）。进度条/TUI 程序按普通管道输出，一般会自行降级。
 
 ## 已知限制
 
-- 无前端 xterm 控制台
-- 唤醒通知按 console 会话投递：`/chat/task` 以 `(session_id, user_id, channel)`
-  三元组全等匹配会话，非 console 频道的通知会自动跳过任务唤醒（只发气泡），
-  避免误建会话
-- 唤醒排队有上限（20 次 × 30s ≈ 10 分钟）：agent 连续繁忙超时则通知过期，
-  气泡仍在——及时 `check`/`wait` 兜底
-- 环形缓冲仅 512KB，更早输出请读日志文件
-- 插件热重载/应用崩溃后的历史孤儿进程不做接管（正常退出有 shutdown 钩子兜底）
-- 不处理并发写入同一进程的 stdin（多 agent 同时写不保证顺序）
+- 无前端终端模拟（xterm）——进程输出走日志与增量读取
+- 通知投递目前仅 **console 会话**有效：其他频道（dingtalk/feishu/qq…）注册的通知完成后不会送达（投递增强在路线图上）
+- 唤醒排队有上限（约 10 分钟）：agent 连续繁忙超时则通知过期，气泡仍在
+- 环形缓冲仅 512KB，更早的输出读日志文件
+- 极短进程（exec 返回时已结束）注册通知会报错——直接 `wait` 收结果即可
