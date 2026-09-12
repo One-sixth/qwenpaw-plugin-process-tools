@@ -60,8 +60,18 @@ async def chat_probe(request, chat_id: str) -> dict:
 
 
 def create_router():
-    """构造 FastAPI 路由（延迟 import，无 fastapi 环境不破坏模块加载）。"""
+    """构造 FastAPI 路由（延迟 import，无 fastapi 环境不破坏模块加载）。
+
+    0.5.0 起同 router 挂两个端点：/chat-status（会话指纹）+
+    /wake-channel（IM 信使，messenger.add_wake_route）——内核约束
+    插件 HTTP prefix 插件级唯一，禁止同一插件重复注册 router。
+    """
     from fastapi import APIRouter, Request
+
+    try:
+        from .messenger import add_wake_route
+    except ImportError:  # 兼容 pytest 直接以项目根导入
+        from messenger import add_wake_route
 
     router = APIRouter()
 
@@ -75,4 +85,5 @@ def create_router():
             "run_at": probe["run_at"],
         }
 
+    add_wake_route(router)
     return router

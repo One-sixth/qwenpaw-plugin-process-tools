@@ -13,6 +13,15 @@ IM 信使：非 console 频道通知从「静默丢失」到「agent 回合 + �
   job 同款 dict 形态）→ 回复事件经 `channel_manager.send_event` 送回
   注册频道」。回复落 session 文件（WebUI 可见）+ IM 收到（wecom 底层
   走 aibot WS `SEND_MSG` 主动推送，无需回调帧）。忙碌返回 409。
+  **端点并入 web_api 既有 router**（`messenger.add_wake_route`）——
+  内核约束插件 HTTP prefix 插件级唯一（registry.py:262），同插件
+  第二次 register_http_router 直接 ValueError 使**整个插件加载回滚**
+  （0.5.0 首次装机实机踩坑，日志锚 `Cleaning up failed plugin load`）。
+
+### Fixed
+- 插件注册失败（上述 prefix 冲突）：拆独立 router → 合并进 web_api
+  的单 router；web_api 对 messenger 的 import 用 try/except 兼容
+  pytest 项目根直导（notifier 同款手法）。
 - **`Notifier._wake_via_messenger` / `_submit_messenger_task`**：
   非 console 投递走信使端点；409 忙碌与 console 唤醒同款 30s×20 重试；
   `X-Agent-Id` 携带注册时 agent 维度（多 agent 不串台）；

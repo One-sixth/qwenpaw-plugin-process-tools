@@ -140,13 +140,17 @@ async def run_wake(
     return {"ok": True, "chat_id": chat.id}
 
 
-def create_router():
-    """构造信使路由（延迟 import，无 fastapi 环境不破坏模块加载）。"""
-    from fastapi import APIRouter, HTTPException, Request
+def add_wake_route(router):
+    """把信使端点挂到既有 router 上（延迟 import，无 fastapi 不破坏加载）。
+
+    ⚠️ 内核约束（0.5.0 实机踩坑）：插件 HTTP prefix **插件级唯一**——
+    同一插件第二次调用 register_http_router（即使同 prefix）会
+    ValueError 导致**整个插件加载回滚**（registry.py:262）。因此信使
+    端点必须并入 web_api 的现有 router，不得独立注册。
+    """
+    from fastapi import HTTPException, Request
 
     from qwenpaw.app.agent_context import get_agent_for_request
-
-    router = APIRouter()
 
     @router.post("/wake-channel")
     async def wake_channel(request: Request, body: dict) -> dict:

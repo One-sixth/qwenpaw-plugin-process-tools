@@ -15,7 +15,6 @@ from qwenpaw.plugins.api import PluginApi
 
 from .manager import get_manager
 from .web_api import create_router
-from .messenger import create_router as create_messenger_router
 from .tools.exec import process_tools_exec
 from .tools.check import process_tools_check
 from .tools.list import process_tools_list
@@ -108,15 +107,11 @@ class ProcessToolsPlugin:
             enabled=True,
         )
 
-        # ── HTTP：会话指纹端点（前端自动刷新伴生，见 web_api.py）──
+        # ── HTTP：会话指纹端点（前端自动刷新伴生，见 web_api.py）
+        #    + IM 信使端点（非 console 频道通知唤醒，messenger.py 并入
+        #    同一 router——内核约束插件 HTTP prefix 插件级唯一）──
         api.register_http_router(
             create_router(), prefix="/process-tools", tags=["process-tools"],
-        )
-        # ── HTTP：IM 信使端点（非 console 频道通知唤醒，见 messenger.py）──
-        api.register_http_router(
-            create_messenger_router(),
-            prefix="/process-tools",
-            tags=["process-tools"],
         )
 
         # ── 启动钩子：清理过期日志 ──

@@ -136,19 +136,30 @@
   （dict 形态，request_context.suppress_console_push=True）→
   channel_manager.send_event 逐事件转发（基类只放行 message+Completed，
   base.py:2302；wecom 底层 aibot WS SEND_MSG 主动推送，无 webhook
-  过期问题）。handler = POST /api/process-tools/wake-channel
-  （get_agent_for_request 按 X-Agent-Id 路由 workspace；忙→409）；
-  notifier 侧 _wake_via_messenger（409→30s×20 重试，同 console 唤醒）+
-  _submit_messenger_task（httpx，MESSENGER_HTTP_TIMEOUT=330s >
-  端点 WAKE_AGENT_TIMEOUT_SECONDS=300s）。deliver 分流：console=
-  气泡+chat/task 双投递不动；非 console=无气泡（死信废弃）+信使，
-  报告「IM唤醒✅/❌(原因)」。
+  过期问题）。handler = POST /api/process-tools/wake-channel（**并入
+  web_api 既有 router**，见下方踩坑；get_agent_for_request 按
+  X-Agent-Id 路由 workspace；忙→409）；notifier 侧 _wake_via_messenger
+  （409→30s×20 重试，同 console 唤醒）+ _submit_messenger_task
+  （httpx，MESSENGER_HTTP_TIMEOUT=330s > 端点
+  WAKE_AGENT_TIMEOUT_SECONDS=300s）。deliver 分流：console=气泡+
+  chat/task 双投递不动；非 console=无气泡（死信废弃）+信使，报告
+  「IM唤醒✅/❌(原因)」。
   **关键内核锚点**：chat/task 的 payload channel 字段透传（console.py
   `_extract_session_and_payload`）；get_agent_for_request 优先级含
   X-Agent-Id header（agent_context.py:54）；stream_query 无并发保护
   （忙检必须插件自己做）；cron executor.py 是 stream_query+send_event
-  的官方范本。全量 145 passed + 4 skipped。
+  的官方范本。全量 146 passed + 4 skipped。
   **待实机冒烟**：wecom 真实通知触发（装机重启后验证手机收到）。
+- **踩坑：插件 HTTP prefix 插件级唯一**（0.5.0 首次装机实机踩坑，
+  2026-09-12）：内核 `plugins/registry.py:262` 对同 prefix 二次注册
+  raise ValueError——**同一插件也不行**，且失败导致整个插件加载回滚
+  （loader 清理 startup/shutdown/tool 全部登记项，日志锚「Cleaning up
+  failed plugin load」+「Unregistered all entries for plugin」）。
+  修复=多端点全部挂同一 router（web_api.create_router 里
+  messenger.add_wake_route(router)）。教训：**插件路由注册逻辑单测
+  测不到**（单测只验证 APIRouter 本身）——涉及 register_http_router
+  的改动必须实机重启验证。相关：pytest 项目根直导的相对 import
+  （web_api import messenger）要 try/except 兜底（notifier 同款）。
 - **macOS zsh 分支未实机验证**（Linux 已 Debian 37/37 核销，同 POSIX 路径风险低）。
 - 唤醒重试 20×30s 上限是否放宽——等真实场景反馈。
 - 远期组：PTY 双后端、`qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置。
