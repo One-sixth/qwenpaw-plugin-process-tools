@@ -6,9 +6,9 @@
 
 ## 当前状态速览（2026-09-12）
 
-- **版本**：v0.5.0（0.5.0 已实施待发布）。历史：作者 commit `4fb3c76`（行为五连改）+ `66bb3ac`（Release 0.4.4）。**0.5.0 新增**（2026-09-12 当日闭环）：messenger.py 信使路由（非 console 通知→agent 回合+回复送回频道）+ notifier 分流改造，见「观察项与待办」0.5.0 条目。
-- **测试**：**145 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
-- **装机**：git 工作树方式，装机 py 目前=0.4.4；0.5.0 新增 messenger.py + notifier.py/plugin.json/README/CHANGELOG 改动**待同步装机目录 + 作者重启 QwenPaw** 后生效并 wecom 实机冒烟。
+- **版本**：v0.6.0（聚合器已实施待发布）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（作者设计，见「观察项与待办」）。
+- **测试**：**156 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **装机**：git 工作树方式，装机 py=0.5.1；0.6.0（notifier.py 聚合器 + plugin.json）**待同步装机 + 重启**。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
 ---
@@ -160,6 +160,35 @@
   测不到**（单测只验证 APIRouter 本身）——涉及 register_http_router
   的改动必须实机重启验证。相关：pytest 项目根直导的相对 import
   （web_api import messenger）要 try/except 兜底（notifier 同款）。
+- **0.5.1 踩坑+修复：并发完成通知丢失**（2026-09-12 作者实机 bug 报告）：
+  现象=多进程「仅完成通知」触发时刻接近时只达一条（#8/#9 同刻 2/2
+  复现；#6 先触发反被丢——agent 正处理前一条通知的唤醒回合）。根因=
+  **stream_query 不向 task_tracker 登记**（running 只有 console 路径
+  attach_or_start 写）→ run_wake 忙检对信使自身并发失明 → 同 session
+  并发多个 agent 回合（未定义行为）。修复=`_SESSION_GATES` 会话门闩
+  （键四元组 agent/channel/user/session）：locked 检查→acquire 同步
+  原子（asyncio 单线程无 await 间隙），撞锁回 busy → notifier 复用
+  30s×20 重试；finally 释放（完成/失败/超时全覆盖）。附：周期快照
+  「0m50s 而非 0m30s」不是 bug——sleep 从注册时刻起算，注册前进程已
+  跑 ~20s（报告判断「行为可解释」正确）。教训：**忙检依赖的信号源
+  要验证「谁在写」**——tracker 是 console 专写的，信使不能白嫖。
+- **0.6.0 已实施：会话聚合器**（2026-09-12 作者设计拍板，当日闭环）：
+  语义=同会话通知进累积器（内存态，宿主关/崩即丢无恢复——作者明确）
+  → 首条通知启动 flusher 睡 3s（FLUSH_WINDOW_SECONDS）聚合 → 忙则
+  3s 粒度忙等**无上限永不放弃**（期间新通知继续累积，重试批次含新
+  到者）→ 空闲取走全部聚合一条投出（标头「【进程通知聚合 ×N】」+
+  分隔线；console=一气泡+一唤醒；IM=一信使回合）。**结构简化**：
+  `_try_wake/_wake_via_messenger` 单次化（`_wake_once/_messenger_once`
+  三态 ok/busy/fail），删 30s×20 重试循环——重试节奏单点归 flusher。
+  气泡时序=唤醒 ok 才发（busy 重试不刷屏）；fail 消费本批不重试。
+  flusher 生命周期=items 空 return + flusher_task=None，新通知懒启动。
+  **实现坑**：deliver 的 key 是四元组（+channel），_deliver_once 拆包
+  必须 key[:3]（首跑 too many values to unpack 炸了 flusher）。聚合器
+  天然串行化同会话投递（0.5.1 gate 的上层加固）。**子 agent 盲审**（零
+  上下文 10 项清单全 PASS，可发布）：4 低危已闭环——messenger 三处
+  「30s×20」过时注释修正、notifier 重复注释行删除、补 flusher 异常
+  路径测试（items 保留+task 复位+懒启动再投）；dict 永不回收记录为
+  已知权衡（受会话数约束，符合内存态拍板）。156+4 测试。
 - **macOS zsh 分支未实机验证**（Linux 已 Debian 37/37 核销，同 POSIX 路径风险低）。
 - 唤醒重试 20×30s 上限是否放宽——等真实场景反馈。
 - 远期组：PTY 双后端、`qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置。

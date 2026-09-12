@@ -15,7 +15,7 @@
       2) chat_manager.get_or_create_chat 幂等取 chat（三元组全等，
          快照来自注册时 contextvar，真实会话必命中）
       3) task_tracker.get_status(chat.id) 忙检（running → 409，
-         通知侧复用 30s×20 重试）
+         通知侧 flusher 以 3s 窗口忙等重试，无上限）
       4) workspace.stream_query(req) 跑一轮真实 agent 回合
          （cron executor 同款 dict 形态；user 消息与回复落 session
          文件，WebUI 可见）
@@ -36,6 +36,26 @@ logger = logging.getLogger(__name__)
 
 # agent 回合上限（含模型推理 + 工具调用）；HTTP 侧超时须大于此值
 WAKE_AGENT_TIMEOUT_SECONDS = 300
+
+# 会话级门闩：信使回合互斥（0.5.0 并发丢失 bug 修复）。
+# workspace.stream_query 是裸跑——不向 task_tracker 登记（tracker 的
+# running 状态只有 console 路径 attach_or_start 会写），忙检对信使自身
+# 的并发完全失明：两个通知同窗口触发 → 两个 agent 回合并发跑在同一
+# session 上 → 未定义行为，后到者丢失（实机 2/2 复现）。gate 以
+# (agent_id, channel, user_id, session_id) 为键，locked 即 busy →
+# 调用方（notifier flusher）以 3s 窗口忙等重试。asyncio 单线程下
+# 「locked 检查 → acquire」之间无 await，天然原子。
+_SESSION_GATES: dict = {}
+
+
+def _gate_key(workspace, channel: str, user_id: str, session_id: str):
+    agent = getattr(workspace, "agent_id", "") or ""
+    return (agent, channel, user_id or "default", session_id)
+
+
+def reset_gates() -> None:
+    """测试用：清空会话门闩（Lock 不跨测试事件循环复用）。"""
+    _SESSION_GATES.clear()
 
 
 async def run_wake(
@@ -80,6 +100,17 @@ async def run_wake(
         if status == "running":
             return {"ok": False, "busy": True}
 
+    # 3b) 会话门闩（信使自身并发的互斥——tracker 对信使回合失明，
+    #     见 _SESSION_GATES 注释）。locked 检查与 acquire 之间无
+    #     await（同步原子），单线程事件循环下无竞态。
+    gate = _SESSION_GATES.setdefault(
+        _gate_key(workspace, channel, user_id, session_id),
+        asyncio.Lock(),
+    )
+    if gate.locked():
+        return {"ok": False, "busy": True}
+    await gate.acquire()
+
     # 4+5) agent 回合 + 事件送频道（cron executor 同款 dict 形态）
     prompt = (
         "【后台进程通知】以下托管进程状态发生变化，请查看并按需处理"
@@ -122,22 +153,25 @@ async def run_wake(
             )
 
     try:
-        await asyncio.wait_for(
-            _run(), timeout=WAKE_AGENT_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        note = (
-            "agent 回合超时(>" f"{WAKE_AGENT_TIMEOUT_SECONDS}s)"
-        )
-        if agent_done:
-            return {"ok": False, "error": note, "agent_done": True}
-        return {"ok": False, "error": note}
-    except Exception as e:  # noqa: BLE001
-        result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        if agent_done:
-            result["agent_done"] = True
-        return result
-    return {"ok": True, "chat_id": chat.id}
+        try:
+            await asyncio.wait_for(
+                _run(), timeout=WAKE_AGENT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            note = (
+                "agent 回合超时(>" f"{WAKE_AGENT_TIMEOUT_SECONDS}s)"
+            )
+            if agent_done:
+                return {"ok": False, "error": note, "agent_done": True}
+            return {"ok": False, "error": note}
+        except Exception as e:  # noqa: BLE001
+            result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            if agent_done:
+                result["agent_done"] = True
+            return result
+        return {"ok": True, "chat_id": chat.id}
+    finally:
+        gate.release()
 
 
 def add_wake_route(router):
@@ -157,7 +191,7 @@ def add_wake_route(router):
         """通知信使：唤醒 agent 跑一轮并把回复送回注册频道。
 
         Body: {channel, user_id, session_id, text}
-        忙碌 → HTTP 409（通知侧复用 30s×20 重试）。
+        忙碌 → HTTP 409（通知侧 flusher 以 3s 窗口忙等重试，无上限）。
         """
         channel = (body.get("channel") or "").strip()
         user_id = (body.get("user_id") or "").strip()

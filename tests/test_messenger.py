@@ -205,7 +205,91 @@ def test_run_wake_timeout(monkeypatch):
     assert "超时" in out["error"]
 
 
-# ── 4) 路由壳：参数校验 + busy→409（fastapi 可用才测）──
+# ── 4) 会话门闩：并发信使回合互斥（0.5.0 并发丢失 bug 回归钉死）──
+
+
+def test_gate_busy_while_first_turn_running():
+    """第一回合跑着时，同会话第二通知 → busy（不再并发 stream_query）。"""
+    import asyncio
+
+    messenger.reset_gates()
+    release = asyncio.Event()
+
+    async def slow_stream(req):
+        await release.wait()  # 模拟 agent 回合进行中
+        yield ev()  # pragma: no cover
+
+    ws1 = make_workspace([])
+    ws1.stream_query = slow_stream
+    ws2 = make_workspace([ev()])
+
+    async def main():
+        t1 = asyncio.create_task(messenger.run_wake(ws1, **WAKE_KW))
+        await asyncio.sleep(0.05)  # 让 t1 拿到 gate 并挂进 stream_query
+        out2 = await messenger.run_wake(ws2, **WAKE_KW)
+        release.set()
+        out1 = await t1
+        return out1, out2
+
+    out1, out2 = run(main())
+    assert out1["ok"] is True
+    assert out2 == {"ok": False, "busy": True}, "同会话并发必须被 gate 挡下"
+    assert ws2.queries == [], "busy 不得启动第二个 stream_query"
+
+
+def test_gate_released_after_completion_and_failure():
+    """回合完成与失败后 gate 必须释放（finally 语义），后续通知可再入。"""
+    messenger.reset_gates()
+
+    ws_ok = make_workspace([ev()])
+    assert run(messenger.run_wake(ws_ok, **WAKE_KW))["ok"] is True
+    assert run(messenger.run_wake(ws_ok, **WAKE_KW))["ok"] is True
+
+    # 失败路径（send_event 炸）后 gate 也得释放
+    messenger.reset_gates()
+    cm = FakeChannelManager()
+    cm.send_event = _boom
+    ws_fail = make_workspace([ev()], channel_manager=cm)
+    out = run(messenger.run_wake(ws_fail, **WAKE_KW))
+    assert out["ok"] is False
+    assert run(messenger.run_wake(ws_ok, **WAKE_KW))["ok"] is True
+
+
+async def _boom(**kwargs):
+    raise RuntimeError("WS 断了")
+
+
+def test_gate_scoped_per_session_key():
+    """不同 agent/频道/会话互不阻塞（键含四元组）。"""
+    import asyncio
+
+    messenger.reset_gates()
+    release = asyncio.Event()
+
+    async def slow_stream(req):
+        await release.wait()
+        yield ev()  # pragma: no cover
+
+    ws1 = make_workspace([])
+    ws1.stream_query = slow_stream
+    ws_other = make_workspace([ev()])
+    ws_other.agent_id = "agent-B"
+
+    async def main():
+        t1 = asyncio.create_task(messenger.run_wake(ws1, **WAKE_KW))
+        await asyncio.sleep(0.05)
+        # 同频道不同 session_id（+不同 agent）→ gate 键不同 → 不阻塞
+        other_kw = dict(WAKE_KW, session_id="wecom:OtherUser")
+        out2 = await messenger.run_wake(ws_other, **other_kw)
+        release.set()
+        await t1
+        return out2
+
+    out2 = run(main())
+    assert out2["ok"] is True, "不同会话键不得互相阻塞"
+
+
+# ── 5) 路由壳：参数校验 + busy→409（fastapi 可用才测）──
 
 
 def test_router_rejects_missing_fields():

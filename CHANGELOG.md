@@ -2,6 +2,60 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.0] - 2026-09-12
+
+会话聚合器：同会话通知聚合为一口气投递（作者设计，全类型会话统一逻辑）。
+
+### Added
+- **通知累积器 + flusher**（`Notifier.deliver` 重构为入队语义）：
+  通知进入所属会话的累积器（key = agent/user/session/channel 四元组，
+  仅内存态——宿主关闭/崩溃即丢，无恢复，作者拍板）；首条通知启动
+  flusher 睡 ``FLUSH_WINDOW_SECONDS``（3s）聚合后续通知；窗口到点
+  会话忙 → 以窗口粒度忙等（**无上限、永不放弃**，期间新通知继续
+  累积并聚合进重试批次）；空闲时取走累积全部，聚合为一条文本
+  （「【进程通知聚合 ×N】」标头 + 分隔线）一口气投出。
+  console = 一条聚合气泡 + 一个唤醒回合；IM = 一个信使回合（agent
+  一条回复覆盖全部通知）。投递期间新到的进下一轮；队列空 flusher
+  退出，新通知懒启动。
+- 聚合器天然串行化同会话投递（0.5.1 gate 的上层加固）+ 消除 IM 刷屏。
+
+### Changed
+- **投递函数全部单次化**：`_try_wake`→`_wake_once`、
+  `_wake_via_messenger`→`_messenger_once`（删 30s×20 内部重试循环），
+  返回统一三态 `ok/busy/fail`；重试节奏单点归 flusher。
+- console 气泡时序：唤醒成功才发气泡（busy 重试期间不重复刷气泡）；
+  fail 时仍尽力发气泡（通知文本至少可见）。
+- 真失败（fail）消费本批不重试（作者拍板）；busy 是唯一重试态。
+
+### Tests
+- 新增 `tests/test_notifier_aggregate.py` 5 例：忙等续聚（重试批次
+  含新通知）、fail 消费不重试 + 懒启动、气泡只在最终投递时发、聚合
+  文本形状、单条直通；`test_notifier_wake.py` 适配 0.6.0 语义
+  （flusher 级断言 + 单次语义映射）。全量 155 passed + 4 skipped。
+
+## [0.5.1] - 2026-09-12
+
+会话门闩：修复并发完成通知丢失（作者实机 bug 报告驱动）。
+
+### Fixed
+- **多进程完成通知接近同时触发时仅一条送达，其余静默丢失**（实机
+  2/2 复现：#8/#9 同刻触发只达一条；#6 先触发反而被丢）。根因：
+  `workspace.stream_query` 是裸跑——**不向 task_tracker 登记**（其
+  running 状态只有 console 路径 `attach_or_start` 会写），`run_wake`
+  的忙检对信使自身的并发完全失明 → 同窗口多通知并发启动多个 agent
+  回合跑在同一 session 上（未定义行为）→ 后到者丢失。
+- **修复：`messenger` 会话级门闩**（`_SESSION_GATES`，键 =
+  (agent_id, channel, user_id, session_id)）：回合开始前 locked 检查
+  （同步原子，单线程事件循环无竞态）→ 撞锁返回 busy → 调用方复用
+  现有 30s×20 重试排队；回合结束/失败/超时均 `finally` 释放。
+  副产物：同会话通知从「轮询重试」变「gate 拒绝+重试」，409 语义
+  保持不变。
+
+### Tests
+- 新增 3 例：gate 忙检短路（第一回合跑着时第二通知 busy 且不启动
+  stream_query）、完成/失败后 gate 释放（finally 回归）、不同会话键
+  互不阻塞。全量 149 passed + 4 skipped。
+
 ## [0.5.0] - 2026-09-12
 
 IM 信使：非 console 频道通知从「静默丢失」到「agent 回合 + 回复送达 IM」。

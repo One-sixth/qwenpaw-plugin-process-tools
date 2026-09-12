@@ -187,31 +187,24 @@ def test_submit_messenger_task_maps_409_and_error():
     assert "频道未配置" in err["error"]
 
 
-def test_wake_via_messenger_busy_then_success(monkeypatch):
-    """信使 409 → 延后重试，成功即返回（重试间隔压缩到毫秒级）。"""
+def test_messenger_once_busy_mapping(monkeypatch):
+    """_messenger_once：busy 响应映射为 "busy"（重试归 flusher）。"""
     nt = Notifier()
-    calls = []
 
     async def fake_to_thread(fn, *args):
-        calls.append(1)
-        if len(calls) < 2:
-            return {"busy": True}
-        return {"ok": True}
+        return {"busy": True}
 
     monkeypatch.setattr(notifier_mod.asyncio, "to_thread", fake_to_thread)
-    monkeypatch.setattr(notifier_mod, "WAKE_RETRY_SECONDS", 0.001)
 
     async def main():
-        return await nt._wake_via_messenger(
-            "a", "u", "s", "wecom", "正文",
-        )
+        return await nt._messenger_once("a", "u", "s", "wecom", "t")
 
-    ok, reason = run(main())
-    assert ok is True and reason == ""
-    assert len(calls) == 2
+    status, _reason = run(main())
+    assert status == "busy"
 
 
-def test_wake_via_messenger_error_no_retry(monkeypatch):
+def test_messenger_once_error_passthrough(monkeypatch):
+    """_messenger_once：非 busy 错误 → "fail" 且 reason 原样（不重试）。"""
     nt = Notifier()
     calls = []
 
@@ -222,116 +215,140 @@ def test_wake_via_messenger_error_no_retry(monkeypatch):
     monkeypatch.setattr(notifier_mod.asyncio, "to_thread", fake_to_thread)
 
     async def main():
-        return await nt._wake_via_messenger(
-            "a", "u", "s", "wecom", "正文",
-        )
+        return await nt._messenger_once("a", "u", "s", "wecom", "t")
 
-    ok, reason = run(main())
-    assert ok is False
+    status, reason = run(main())
+    assert status == "fail"
     assert reason == "500: 内部错误"
-    assert len(calls) == 1, "非冲突错误不应触发重试"
+    assert len(calls) == 1, "单次语义：不得内部重试"
 
 
 
 # ── 2) deliver 双投递语义：气泡按 session_id；唤醒仅 console 且带真实 user ──
 
 
-def test_deliver_wake_routing_and_channel_guard(monkeypatch):
+def test_deliver_enqueues_and_flusher_aggregates_console(monkeypatch):
+    """0.6.0：deliver 入队；flusher 把窗口内多条通知聚合为一次双投递。"""
     cps = pytest.importorskip("qwenpaw.app.console_push_store")
+    monkeypatch.setattr(notifier_mod, "FLUSH_WINDOW_SECONDS", 0.01)
 
     pushed = []
 
-    async def fake_append(session_id, text, *, sticky=False):
-        pushed.append((session_id, sticky))
+    async def fake_push(session_id, text, *, sticky=False):
+        pushed.append((session_id, text))
 
     woken = []
 
-    async def fake_wake(self, agent_id, user_id, session_id, text):
-        woken.append((agent_id, user_id, session_id))
-        return True, ""
+    async def fake_wake_once(self, agent_id, user_id, session_id, text):
+        woken.append((agent_id, user_id, session_id, text))
+        return "ok", ""
 
-    messengered = []
-
-    async def fake_messenger(
-        self, agent_id, user_id, session_id, channel, text,
-    ):
-        messengered.append((channel, agent_id, user_id, session_id))
-        return True, ""
-
-    monkeypatch.setattr(cps, "append", fake_append)
-    monkeypatch.setattr(Notifier, "_try_wake", fake_wake)
-    monkeypatch.setattr(Notifier, "_wake_via_messenger", fake_messenger)
+    monkeypatch.setattr(cps, "append", fake_push)
+    monkeypatch.setattr(Notifier, "_wake_once", fake_wake_once)
 
     nt = Notifier()
     key = ("agent-1", "user-x", "sess-9")
+    acc_key = ("agent-1", "user-x", "sess-9", "console")
 
-    # 非 console：信使路由（0.5.0），不写死信气泡，不走 console 唤醒
-    r = run(nt.deliver(key, "正文", wake_channel="matrix"))
-    assert woken == []
-    assert pushed == [], "console_push_store 对非 console 是死信，不写"
-    assert messengered == [("matrix", "agent-1", "user-x", "sess-9")]
-    assert "IM唤醒✅" in r and "气泡" not in r
+    async def main():
+        await nt.deliver(key, "通知A", wake_channel="console")
+        await nt.deliver(key, "通知B", wake_channel="console")
+        await _wait_flusher_done(nt, acc_key)
 
-    # console：气泡 + 唤醒固定双投递，带真实 (agent_id, user_id, session_id)
-    r = run(nt.deliver(key, "正文2", wake_channel="console"))
-    assert woken == [("agent-1", "user-x", "sess-9")]
-    assert pushed == [("sess-9", True)]
-    assert "唤醒✅" in r and "气泡✅" in r
-    assert messengered.__len__() == 1, "console 不走信使"
+    run(main())
+    assert len(woken) == 1, "窗口内两条通知必须聚合为一次唤醒"
+    assert "通知A" in woken[0][3] and "通知B" in woken[0][3]
+    assert len(pushed) == 1, "一条聚合气泡"
+    assert "进程通知聚合 ×2" in pushed[0][1]
+    assert pushed[0][0] == "sess-9"
 
 
-def test_deliver_surfaces_messenger_failure_reason(monkeypatch):
-    """非 console 信使失败：reason 必须进报告（与 console 唤醒同语义）。"""
-    async def fake_messenger_fail(
-        self, agent_id, user_id, session_id, channel, text,
-    ):
-        return False, "频道未配置: wecom"
+def test_deliver_enqueues_messenger_path(monkeypatch):
+    """0.6.0：非 console 走 _messenger_once（聚合文本整条投出）。"""
+    monkeypatch.setattr(notifier_mod, "FLUSH_WINDOW_SECONDS", 0.01)
 
-    monkeypatch.setattr(
-        Notifier, "_wake_via_messenger", fake_messenger_fail,
-    )
+    called = []
+
+    async def fake_ms_once(self, a, u, s, channel, text):
+        called.append((channel, a, u, s, text))
+        return "ok", ""
+
+    monkeypatch.setattr(Notifier, "_messenger_once", fake_ms_once)
 
     nt = Notifier()
-    r = run(nt.deliver(("a", "u", "s"), "正文", wake_channel="wecom"))
-    assert "IM唤醒❌(频道未配置: wecom)" in r
+    key = ("agent-1", "user-x", "wecom-sess")
+    acc_key = ("agent-1", "user-x", "wecom-sess", "wecom")
+
+    async def main():
+        await nt.deliver(key, "通知A", wake_channel="wecom")
+        await _wait_flusher_done(nt, acc_key)
+
+    run(main())
+    assert len(called) == 1
+    assert called[0][0] == "wecom"
+    assert called[0][1:4] == ("agent-1", "user-x", "wecom-sess")
+    assert "通知A" in called[0][4]
 
 
-def test_deliver_surfaces_wake_failure_reason(monkeypatch):
-    """0.4.0 实链路发现裸「唤醒❌」无法定位死因——reason 必须进报告。"""
-    pytest.importorskip("qwenpaw.app.console_push_store")
+async def _wait_flusher_done(nt, acc_key, rounds=500):
+    """轮询等待 flusher 消费完并退出（测试辅助）。"""
+    import asyncio
 
-    async def fake_append(session_id, text, *, sticky=False):
-        return None
+    acc = nt._accumulators.get(acc_key)
+    assert acc is not None, "enqueue 必须建立累积器"
+    for _ in range(rounds):
+        if not acc.items and (
+            acc.flusher_task is None or acc.flusher_task.done()
+        ):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("flusher 未在预期时间内完成")
+
+
+def test_deliver_surfaces_wake_failure_detail(monkeypatch):
+    """0.6.0：console 唤醒 fail 时气泡仍发（通知文本至少可见）。"""
+    cps = pytest.importorskip("qwenpaw.app.console_push_store")
+    monkeypatch.setattr(notifier_mod, "FLUSH_WINDOW_SECONDS", 0.01)
+
+    pushed = []
+
+    async def fake_push(session_id, text, *, sticky=False):
+        pushed.append(text)
 
     async def fake_wake_fail(self, agent_id, user_id, session_id, text):
-        return False, "RuntimeError: 连接被拒绝"
+        return "fail", "RuntimeError: 连接被拒绝"
 
-    monkeypatch.setattr(
-        "qwenpaw.app.console_push_store.append", fake_append,
-    )
-    monkeypatch.setattr(Notifier, "_try_wake", fake_wake_fail)
+    monkeypatch.setattr(cps, "append", fake_push)
+    monkeypatch.setattr(Notifier, "_wake_once", fake_wake_fail)
 
     nt = Notifier()
-    r = run(nt.deliver(("a", "u", "s"), "正文", wake_channel="console"))
-    assert "唤醒❌(RuntimeError: 连接被拒绝)" in r
-    assert "气泡✅" in r
+    key = ("a", "u", "sess-fail")
+
+    async def main():
+        await nt.deliver(key, "正文", wake_channel="console")
+        await _wait_flusher_done(nt, ("a", "u", "sess-fail", "console"))
+
+    run(main())
+    assert len(pushed) == 1 and "正文" in pushed[0], (
+        "fail 时气泡仍尽力发出"
+    )
 
 
-def test_try_wake_exception_reason_tuple(monkeypatch):
-    """_try_wake 异常路径：返回 (False, 类型: 消息) 而非裸 False。"""
+def test_wake_once_exception_reason(monkeypatch):
+    """_wake_once 异常路径：("fail", 类型: 消息)。"""
     nt = Notifier()
 
     def boom(*args, **kwargs):
         raise RuntimeError("模拟挂掉")
 
     monkeypatch.setattr(nt, "_submit_wake_task", boom)
-    ok, reason = run(nt._try_wake("a", "u", "s", "正文"))
-    assert ok is False
+    status, reason = run(nt._wake_once("a", "u", "s", "正文"))
+    assert status == "fail"
     assert "RuntimeError" in reason and "模拟挂掉" in reason
 
 
-def test_try_wake_error_passthrough(monkeypatch):
-    """非 409 错误响应：error 文本原样进 reason，且不重试不睡眠。"""
+def test_wake_once_error_passthrough(monkeypatch):
+    """非 409 错误响应 → "fail"，reason 原样（单次语义不重试）。"""
     nt = Notifier()
     calls = []
 
@@ -340,10 +357,22 @@ def test_try_wake_error_passthrough(monkeypatch):
         return {"ok": False, "error": "404: 端点不存在"}
 
     monkeypatch.setattr(nt, "_submit_wake_task", fake_submit)
-    ok, reason = run(nt._try_wake("a", "u", "s", "正文"))
-    assert ok is False
+    status, reason = run(nt._wake_once("a", "u", "s", "正文"))
+    assert status == "fail"
     assert reason == "404: 端点不存在"
-    assert len(calls) == 1, "非冲突错误不应触发重试"
+    assert len(calls) == 1, "单次语义：不得内部重试"
+
+
+def test_wake_once_busy_mapping(monkeypatch):
+    """409 conflict → "busy"（flusher 忙等的信号源）。"""
+    nt = Notifier()
+
+    def fake_submit(*args, **kwargs):
+        return {"conflict": True}
+
+    monkeypatch.setattr(nt, "_submit_wake_task", fake_submit)
+    status, _reason = run(nt._wake_once("a", "u", "s", "正文"))
+    assert status == "busy"
 
 
 # ── 3) notice 工具接线：频道快照贯穿注册；已结束进程改报错引导 wait ──
