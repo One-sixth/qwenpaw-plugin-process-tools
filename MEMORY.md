@@ -6,9 +6,9 @@
 
 ## 当前状态速览（2026-09-12）
 
-- **版本**：v0.6.0（聚合器已实施+双链路实机验证闭环，待作者 commit 发布）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（作者设计，见「观察项与待办」）。
-- **测试**：**156 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
-- **装机**：git 工作树方式，装机 py=0.5.1；0.6.0 已装机验证——**wecom 聚合投递（作者实测 OK）+ console 聚合气泡+唤醒单回合（agent 亲验，忙等实测：投递等 agent 回合结束后发生）**，双链路闭环，待作者 commit。
+- **版本**：v0.6.1（notice 批量注册）。0.6.0 已提交（`cd19195`）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量。
+- **测试**：**164 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。0.6.1 待同步 py 进工作树 → 作者重启验证。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
 ---
@@ -30,6 +30,7 @@
 - 导入与 file-tools 同款：相对导入 + try/except ImportError 双模式；docstring `Args:` 即参数 schema；`make_success/make_error` 统一 ToolChunk；6 工具全 async。
 - 治理：全工具 `tool_type="shell"`；仅 exec `target_param="command"`。
 - **工具时态三分（作者定稿）**：notice=未来事件（仅运行中可注册，已结束→error 引导 check）／check=当下与过去／wait=未完成。**勿回退**成 wait/check 并列引导。
+- **notice 结果三段式（作者定稿 0.6.1）**：固定三段「已生效→不存在→已结束」按序拼接、空段跳过，单/批/混合共用一条生成规则；**逐个独立校验，有生效即 success、全失败才 error**，勿回退成整批连坐或逐行逐条引导（引导语每类最多一次）。
 
 ---
 
@@ -65,6 +66,10 @@
 | 0.4.2 | notice 语义收口 | 已结束→error 引导 **check**（当时作者纠偏：误写 wait）；异步到期投递不变 |
 | 0.4.3 | 死会话数据清理 | **双判据**（chats.json 条目 ∧ 真实会话文件）防两种死法漏杀；agent 维度双别名（多留无害多删有害）；Linux Debian 实机 37/37 核销 |
 | 0.4.4 | 见下节详解 | 见下节 |
+| 0.5.0 | IM 信使（非 console 频道通知投递） | 见「观察项与待办」 |
+| 0.5.1 | 会话门闩修并发完成通知丢失 | 见「观察项与待办」 |
+| 0.6.0 | 会话聚合器（3s 窗口聚合投递，忙等无上限） | 见「观察项与待办」 |
+| 0.6.1 | notice 批量注册：逐个独立校验（部分成功语义，有生效即 success）、三段式结果消息（已生效/不存在/已结束，空段跳过零特例） | 消息表经三轮迭代定稿：逐行→分组同类项→三段式；引导语每类最多一次；「新注册 vs 更新」合并为「已生效」；单进程旧文案同步退役 |
 
 ### 刷新判据演化（0.3.2 终稿，防走回头路）
 
@@ -190,7 +195,6 @@
   路径测试（items 保留+task 复位+懒启动再投）；dict 永不回收记录为
   已知权衡（受会话数约束，符合内存态拍板）。156+4 测试。
 - **macOS zsh 分支未实机验证**（Linux 已 Debian 37/37 核销，同 POSIX 路径风险低）。
-- 唤醒重试 20×30s 上限是否放宽——等真实场景反馈。
 - 远期组：PTY 双后端、`qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置。
 - 多 agent 真机并发隔离未测（单测+子代理双向不可见已过）。
 - 通知投递最终形态（0.6.0 实机闭环）：全部会话统一「聚合器」——3s 窗口聚合一口气投递，忙等无上限（内存态，宿主关/崩即丢）。console=聚合气泡+单唤醒回合（agent 亲验）；非 console=信使回合回复送回 IM（wecom 作者实测）。0.5.1 gate 保留为 API 直调的兜底防并发层。
