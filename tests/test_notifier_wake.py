@@ -77,6 +77,162 @@ def test_submit_wake_task_empty_user_falls_back_default():
     assert captured["payload"]["user_id"] == "default"
 
 
+# ── 1b) 信使提交（0.5.0 非 console 通道）：payload 保真 + 409/错误映射 ──
+
+
+def test_submit_messenger_task_payload_and_header():
+    """信使提交：真实三元组进 payload；X-Agent-Id 携带注册 agent 维度。"""
+    httpx = pytest.importorskip("httpx")
+    pytest.importorskip("qwenpaw.agents.tools.agent_management")
+
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, json=None, headers=None, **kw):
+            captured["url"] = url
+            captured["payload"] = json
+            captured["headers"] = headers
+            return FakeResp()
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(httpx, "Client", FakeClient)
+        monkey.setattr(
+            "qwenpaw.agents.tools.agent_management."
+            "resolve_agent_api_base_url",
+            lambda: "http://127.0.0.1:9",
+        )
+        out = Notifier._submit_messenger_task(
+            "agent-A", "user-real", "wecom:user-real", "wecom", "正文",
+        )
+    finally:
+        monkey.undo()
+    assert out == {"ok": True}
+    assert captured["url"].endswith("/api/process-tools/wake-channel")
+    payload = captured["payload"]
+    assert payload == {
+        "channel": "wecom",
+        "user_id": "user-real",
+        "session_id": "wecom:user-real",
+        "text": "正文",
+    }
+    assert captured["headers"]["X-Agent-Id"] == "agent-A"
+
+
+def test_submit_messenger_task_maps_409_and_error():
+    httpx = pytest.importorskip("httpx")
+    pytest.importorskip("qwenpaw.agents.tools.agent_management")
+
+    class FakeResp:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+            self.text = str(body)
+
+        def json(self):
+            if isinstance(self._body, dict):
+                return self._body
+            raise ValueError("not json")
+
+    class FakeClient:
+        def __init__(self, responder):
+            self._responder = responder
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **kw):
+            return self._responder()
+
+    responses = iter([
+        FakeResp(409, {"detail": "busy"}),
+        FakeResp(404, {"detail": "频道未配置: wecom"}),
+    ])
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(
+            httpx, "Client", lambda *a, **kw: FakeClient(
+                lambda: next(responses),
+            ),
+        )
+        monkey.setattr(
+            "qwenpaw.agents.tools.agent_management."
+            "resolve_agent_api_base_url",
+            lambda: "http://127.0.0.1:9",
+        )
+        busy = Notifier._submit_messenger_task("a", "u", "s", "wecom", "t")
+        err = Notifier._submit_messenger_task("a", "u", "s", "wecom", "t")
+    finally:
+        monkey.undo()
+    assert busy == {"busy": True}, "409 必须映射为 busy（触发重试）"
+    assert err["ok"] is False
+    assert "频道未配置" in err["error"]
+
+
+def test_wake_via_messenger_busy_then_success(monkeypatch):
+    """信使 409 → 延后重试，成功即返回（重试间隔压缩到毫秒级）。"""
+    nt = Notifier()
+    calls = []
+
+    async def fake_to_thread(fn, *args):
+        calls.append(1)
+        if len(calls) < 2:
+            return {"busy": True}
+        return {"ok": True}
+
+    monkeypatch.setattr(notifier_mod.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(notifier_mod, "WAKE_RETRY_SECONDS", 0.001)
+
+    async def main():
+        return await nt._wake_via_messenger(
+            "a", "u", "s", "wecom", "正文",
+        )
+
+    ok, reason = run(main())
+    assert ok is True and reason == ""
+    assert len(calls) == 2
+
+
+def test_wake_via_messenger_error_no_retry(monkeypatch):
+    nt = Notifier()
+    calls = []
+
+    async def fake_to_thread(fn, *args):
+        calls.append(1)
+        return {"ok": False, "error": "500: 内部错误"}
+
+    monkeypatch.setattr(notifier_mod.asyncio, "to_thread", fake_to_thread)
+
+    async def main():
+        return await nt._wake_via_messenger(
+            "a", "u", "s", "wecom", "正文",
+        )
+
+    ok, reason = run(main())
+    assert ok is False
+    assert reason == "500: 内部错误"
+    assert len(calls) == 1, "非冲突错误不应触发重试"
+
+
+
 # ── 2) deliver 双投递语义：气泡按 session_id；唤醒仅 console 且带真实 user ──
 
 
@@ -94,23 +250,50 @@ def test_deliver_wake_routing_and_channel_guard(monkeypatch):
         woken.append((agent_id, user_id, session_id))
         return True, ""
 
+    messengered = []
+
+    async def fake_messenger(
+        self, agent_id, user_id, session_id, channel, text,
+    ):
+        messengered.append((channel, agent_id, user_id, session_id))
+        return True, ""
+
     monkeypatch.setattr(cps, "append", fake_append)
     monkeypatch.setattr(Notifier, "_try_wake", fake_wake)
+    monkeypatch.setattr(Notifier, "_wake_via_messenger", fake_messenger)
 
     nt = Notifier()
     key = ("agent-1", "user-x", "sess-9")
 
-    # 非 console：跳过唤醒但气泡仍投（session_id 定位不受影响）
+    # 非 console：信使路由（0.5.0），不写死信气泡，不走 console 唤醒
     r = run(nt.deliver(key, "正文", wake_channel="matrix"))
     assert woken == []
-    assert "matrix" in r and "唤醒⏭️" in r and "气泡✅" in r
-    assert pushed == [("sess-9", True)]
+    assert pushed == [], "console_push_store 对非 console 是死信，不写"
+    assert messengered == [("matrix", "agent-1", "user-x", "sess-9")]
+    assert "IM唤醒✅" in r and "气泡" not in r
 
-    # console：唤醒带真实 (agent_id, user_id, session_id) 三元组
-    # （0.4.4 起气泡+唤醒固定双投递，无 wake_agent 开关）
+    # console：气泡 + 唤醒固定双投递，带真实 (agent_id, user_id, session_id)
     r = run(nt.deliver(key, "正文2", wake_channel="console"))
     assert woken == [("agent-1", "user-x", "sess-9")]
-    assert "唤醒✅" in r
+    assert pushed == [("sess-9", True)]
+    assert "唤醒✅" in r and "气泡✅" in r
+    assert messengered.__len__() == 1, "console 不走信使"
+
+
+def test_deliver_surfaces_messenger_failure_reason(monkeypatch):
+    """非 console 信使失败：reason 必须进报告（与 console 唤醒同语义）。"""
+    async def fake_messenger_fail(
+        self, agent_id, user_id, session_id, channel, text,
+    ):
+        return False, "频道未配置: wecom"
+
+    monkeypatch.setattr(
+        Notifier, "_wake_via_messenger", fake_messenger_fail,
+    )
+
+    nt = Notifier()
+    r = run(nt.deliver(("a", "u", "s"), "正文", wake_channel="wecom"))
+    assert "IM唤醒❌(频道未配置: wecom)" in r
 
 
 def test_deliver_surfaces_wake_failure_reason(monkeypatch):
