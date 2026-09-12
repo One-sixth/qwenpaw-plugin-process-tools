@@ -1,29 +1,38 @@
 # -*- coding: utf-8 -*-
-"""通知系统：注册制 + 完成/周期通知 + 按频道投递。
+"""通知系统：注册制 + 完成/周期通知 + 会话聚合投递。
 
 核心语义：
 
 - **opt-in**：后台进程不自动推送任何东西，必须显式 notice 注册；
 - **完成通知幂等**：`completion_sent` 标记防重复；
 - **周期通知**：interval_seconds ≥ 30 才生效，进程退出即取消；
-- **投递按频道分流**（0.5.0）：
-  - console 会话（双投递）：
-    1. 通知气泡：``console_push_store.append(session_id, text, sticky=True)``
-       （QwenPaw 前端 2.5s 轮询展示，用户可见）；
-    2. 唤醒 agent：POST ``/console/chat/task`` 后台任务端点
-       （复用内核 ``agents.tools.agent_management`` 官方客户端 kit，
-       与 ``submit_to_agent`` 同路；会话忙碌返回 409 → 延后重试）。
-       **约束**：该端点按 (session_id, user_id, channel) 三元组**全等**
-       匹配会话、找不到就新建——payload 必须带 contextvar 真实维度
-       （v0.1.2 修复写死 user_id 导致的幽灵会话）。
-  - 非 console 会话（信使路由，0.5.0 新增）：
-    气泡不再投（console_push_store 是死信）；改经插件信使端点
-    ``POST /api/process-tools/wake-channel``（messenger.py）——
-    agent 跑一轮真实回合，回复经 ``channel_manager.send_event``
-    送回注册频道（cron agent job 同款链路）。忙碌 409 → 同款
-    30s×20 重试。
+- **会话聚合投递**（0.6.0，全部会话类型统一逻辑）：
+  通知不直接投递，进入所属会话的**累积器**（内存态，仅本进程内有效，
+  宿主关闭/崩溃即丢弃、无恢复）：
+    1. 首条通知启动 flusher，睡 ``FLUSH_WINDOW_SECONDS``（3s）聚合
+       后续通知；
+    2. 窗口到点投递：会话忙（console 唤醒 409 / 信使 gate+tracker）
+       → 再等 3s **忙等无上限、永不放弃**，期间新通知继续累积；
+    3. 会话空闲 → 取走累积**全部**通知，聚合为一条文本一口气投出：
+       console = 一条气泡 + 一个唤醒回合；非 console = 一个信使回合
+       （agent 一条回复覆盖全部通知）；
+    4. 投递期间新到的通知进入下一轮聚合；队列空则 flusher 退出，
+       下条通知懒启动。
+  真失败（频道未配置/回合异常）不重试，记日志；busy 是唯一重试态。
+  投递函数全部单次语义（无内部重试循环），重试节奏单点归 flusher。
 
-所有投递失败都不阻塞调用方：气泡与通知记录仍然保留。
+console 会话（双投递）：
+  1. 通知气泡：``console_push_store.append(session_id, text, sticky=True)``
+     （QwenPaw 前端 2.5s 轮询展示，用户可见）——聚合文本一条气泡；
+  2. 唤醒 agent：POST ``/console/chat/task`` 后台任务端点（内核官方
+     kit；忙 409 → flusher 忙等）。**约束**：该端点按 (session_id,
+     user_id, channel) 三元组**全等**匹配会话、找不到就新建——payload
+     必须带 contextvar 真实维度（v0.1.2 幽灵会话教训）。
+
+非 console 会话（信使路由，0.5.0）：
+  POST ``/api/process-tools/wake-channel``（messenger.py）——agent 跑
+  一轮真实回合，回复经 ``channel_manager.send_event`` 送回注册频道
+  （cron agent job 同款链路）。会话级门闩 + tracker 双重忙检。
 """
 
 import asyncio
@@ -44,11 +53,25 @@ logger = logging.getLogger(__name__)
 
 MIN_INTERVAL_SECONDS = 30  # 周期通知最小间隔（同设计文档）
 RECOMMENDED_INTERVAL_SECONDS = 900
-WAKE_RETRY_SECONDS = 30.0  # 409（会话忙）重试间隔
-WAKE_MAX_RETRIES = 20  # 唤醒重试上限（约 10 分钟）
 TAIL_LINES_IN_NOTICE = 10
 # 信使 HTTP 超时须大于 messenger.WAKE_AGENT_TIMEOUT_SECONDS（300s）
 MESSENGER_HTTP_TIMEOUT = 330.0
+# 聚合窗口（秒）：首条通知后至少等这么久，收集同会话后续通知；
+# 会话忙时同样以该粒度忙等（0.6.0：忙等无上限、永不放弃）
+FLUSH_WINDOW_SECONDS = 3.0
+
+
+@dataclass
+class _NoticeAccumulator:
+    """一个会话的通知累积器（key = agent/user/session/channel 四元组）。
+
+    仅内存态：宿主关闭/崩溃即丢，无恢复语义（0.6.0 作者拍板）。
+    items 只 append + 头部按已投递数量删除（flusher 单线程操作）。
+    """
+
+    channel: str = "console"  # 首条通知的频道快照（同 key 恒定）
+    items: list = field(default_factory=list)
+    flusher_task: Optional[asyncio.Task] = None
 
 
 @dataclass
@@ -77,6 +100,8 @@ class Notifier:
     def __init__(self) -> None:
         # key: (agent_id, user_id, session_id) -> {num: Notice}
         self._notices: dict = {}
+        # key: (agent_id, user_id, session_id, channel) -> _NoticeAccumulator
+        self._accumulators: dict = {}
 
     # ── 注册 ──
 
@@ -142,7 +167,7 @@ class Notifier:
             f"输出末尾：\n{tail}"
         )
 
-    # ── 双投递 ──
+    # ── 聚合投递（0.6.0：全部会话类型统一逻辑）──
 
     async def deliver(
         self,
@@ -150,52 +175,127 @@ class Notifier:
         text: str,
         wake_channel: str = "console",
     ) -> str:
-        """把通知投出去，返回投递情况描述。
+        """通知入队（聚合器统一入口，0.6.0）。
+
+        通知进入所属会话的累积器，由 flusher 聚合投递：首条通知启动
+        3s 聚合窗口；窗口到点会话忙则 3s 忙等（**无上限、永不放弃**，
+        期间通知继续累积）；空闲时取走全部累积一口气投出。仅内存态：
+        宿主关闭/崩溃则未投递通知丢弃，无恢复语义。
 
         mp_key = (agent_id, user_id, session_id)
-        wake_channel = 注册通知时快照的频道，投递按频道分流（0.5.0）：
-        console 走气泡+chat/task 双投递；非 console 走信使路由
-        （agent 回合 + 回复送回频道，无气泡）。
+
+        Returns: 入队描述（非投递结果——投递结果由 flusher 记日志）。
         """
         agent_id, user_id, session_id = mp_key
-        report = []
-        if wake_channel == "console":
-            # 1) 通知气泡（进程内直写 console push store，用户侧可见）
-            try:
-                from qwenpaw.app.console_push_store import (
-                    append as push_append,
-                )
+        key = (agent_id, user_id, session_id, wake_channel)
+        acc = self._accumulators.get(key)
+        if acc is None:
+            acc = _NoticeAccumulator(channel=wake_channel)
+            self._accumulators[key] = acc
+        acc.items.append(text)
+        if acc.flusher_task is None or acc.flusher_task.done():
+            acc.flusher_task = asyncio.create_task(self._flusher(key, acc))
+        logger.info(
+            "proc-tools 通知入队：会话 %s（累积 %d 条，聚合投递中）",
+            session_id[:30], len(acc.items),
+        )
+        return f"已入队聚合（会话累积 {len(acc.items)} 条）"
 
-                await push_append(session_id, text, sticky=True)
-                report.append("气泡✅")
-            except Exception as e:  # noqa: BLE001
-                logger.debug("process-tools 通知气泡投递失败: %s", e)
-                report.append(f"气泡❌({type(e).__name__})")
-            # 2) 唤醒 agent（同 submit_to_agent 的官方路径，固定执行）
-            ok, reason = await self._try_wake(
+    @staticmethod
+    def _join_notice_text(items: list) -> str:
+        """多条通知聚合为一条文本；单条原样直通。"""
+        if len(items) == 1:
+            return items[0]
+        sep = "\n\n" + "─" * 24 + "\n\n"
+        return f"【进程通知聚合 ×{len(items)}】\n\n" + sep.join(items)
+
+    async def _flusher(self, key: tuple, acc: _NoticeAccumulator) -> None:
+        """会话聚合投递循环（内存态，随任务结束丢弃）。
+
+        节奏：睡一个聚合窗口 → 会话忙则继续以窗口粒度忙等（无上限，
+        期间新通知持续累积）→ 空闲时取走全部累积一口气投递 → 投递
+        期间新到的进下一轮；队列空则退出（下条通知懒启动）。
+        """
+        try:
+            while True:
+                await asyncio.sleep(FLUSH_WINDOW_SECONDS)
+                batch = list(acc.items)
+                if not batch:
+                    return  # 队列空 → flusher 退出
+                text = self._join_notice_text(batch)
+                status, detail = await self._deliver_once(
+                    key, text, acc.channel,
+                )
+                if status == "busy":
+                    # 忙：本批不消费（新通知继续累积），下轮重新聚合
+                    logger.info(
+                        "proc-tools 会话 %s 忙，%ds 后重试聚合投递",
+                        key[2][:30], int(FLUSH_WINDOW_SECONDS),
+                    )
+                    continue
+                # ok / fail 都消费本批（fail 不重试，作者拍板）
+                del acc.items[:len(batch)]
+                if status == "ok":
+                    logger.info(
+                        "proc-tools 会话 %s 聚合投递成功（%d 条）：%s",
+                        key[2][:30], len(batch), detail,
+                    )
+                else:
+                    logger.warning(
+                        "proc-tools 会话 %s 聚合投递失败（%d 条，"
+                        "不重试）：%s",
+                        key[2][:30], len(batch), detail,
+                    )
+                # 回到外层：投递期间新到的通知再睡一个窗口聚合
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("proc-tools 聚合 flusher 异常")
+        finally:
+            acc.flusher_task = None  # 允许下条通知懒启动新 flusher
+
+    async def _deliver_once(
+        self, key: tuple, text: str, wake_channel: str,
+    ) -> tuple:
+        """单次聚合投递（无内部重试）。Returns (status, detail)。
+
+        status ∈ "ok" | "busy" | "fail"；detail 为投递报告。
+        console：唤醒成功才发气泡（busy 重试期间不重复刷气泡）；
+        fail 时仍尽力发气泡（通知文本至少可见）。
+        """
+        # key = (agent_id, user_id, session_id, channel)——channel 已由
+        # wake_channel 参数显式传入，这里只取前三维
+        agent_id, user_id, session_id = key[:3]
+        if wake_channel == "console":
+            status, reason = await self._wake_once(
                 agent_id, user_id, session_id, text,
             )
-            if ok:
-                report.append("唤醒✅")
-            else:
-                logger.warning(
-                    "process-tools 唤醒投递失败: %s", reason,
-                )
-                report.append(f"唤醒❌({reason})")
-        else:
-            # 非 console：信使路由（agent 跑一轮 + 回复送回频道）。
-            # console_push_store 是死信（该 session 无网页消费），不写。
-            ok, reason = await self._wake_via_messenger(
-                agent_id, user_id, session_id, wake_channel, text,
-            )
-            if ok:
-                report.append("IM唤醒✅")
-            else:
-                logger.warning(
-                    "process-tools IM 信使唤醒失败: %s", reason,
-                )
-                report.append(f"IM唤醒❌({reason})")
-        return " ".join(report)
+            if status == "busy":
+                return "busy", "唤醒busy(会话忙)"
+            bubble = await self._push_bubble(session_id, text)
+            if status == "ok":
+                return "ok", f"{bubble} 唤醒✅"
+            return "fail", f"{bubble} 唤醒❌({reason})"
+        status, reason = await self._messenger_once(
+            agent_id, user_id, session_id, wake_channel, text,
+        )
+        if status == "ok":
+            return "ok", "IM唤醒✅"
+        if status == "busy":
+            return "busy", "IM唤醒busy(会话忙)"
+        return "fail", f"IM唤醒❌({reason})"
+
+    @staticmethod
+    async def _push_bubble(session_id: str, text: str) -> str:
+        """投一条 console 气泡（尽力，失败不阻断）。Returns 描述。"""
+        try:
+            from qwenpaw.app.console_push_store import append as push_append
+
+            await push_append(session_id, text, sticky=True)
+            return "气泡✅"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("process-tools 通知气泡投递失败: %s", e)
+            return f"气泡❌({type(e).__name__})"
 
     async def _send_completion(self, mp: "ManagedProcess", notice: Notice) -> None:
         if notice.completion_sent:
@@ -205,36 +305,31 @@ class Notifier:
         result = await self.deliver(
             mp.key, text, notice.wake_channel,
         )
-        logger.info("proc #%d 完成通知已投递：%s", mp.num, result)
+        logger.info("proc #%d 完成通知已入队：%s", mp.num, result)
 
-    async def _try_wake(
+    async def _wake_once(
         self, agent_id: str, user_id: str, session_id: str, text: str,
     ) -> tuple:
-        """通过本地 API 提交后台 chat task 唤醒 agent；忙则延后重试。
+        """单次提交 console 唤醒（无内部重试，重试节奏归 flusher）。
+
+        ``/console/chat/task`` 端点 409 = 会话忙 → "busy"。
 
         Returns:
-            (ok, reason)：失败时 reason 为具体死因（异常类型/响应错误/
-            重试耗尽），成功时为 ""。忙(409)不算死因，只算等待。
+            ("ok"|"busy"|"fail", reason)：fail 时 reason 为具体死因。
         """
-        reason = ""
-        for _attempt in range(WAKE_MAX_RETRIES):
-            try:
-                submitted = await asyncio.to_thread(
-                    self._submit_wake_task,
-                    agent_id, user_id, session_id, text,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug("process-tools 唤醒提交异常: %s", e)
-                return False, f"{type(e).__name__}: {e}"
-            if submitted.get("ok"):
-                return True, ""
-            if submitted.get("conflict"):
-                # 会话正忙：延后重试（设计文档「忙碌时排队」的近似实现）
-                reason = f"会话忙，重试 {WAKE_MAX_RETRIES} 次(约 10 分钟)后仍未成功"
-                await asyncio.sleep(WAKE_RETRY_SECONDS)
-                continue
-            return False, str(submitted.get("error") or "未知失败")
-        return False, reason
+        try:
+            submitted = await asyncio.to_thread(
+                self._submit_wake_task,
+                agent_id, user_id, session_id, text,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("process-tools 唤醒提交异常: %s", e)
+            return "fail", f"{type(e).__name__}: {e}"
+        if submitted.get("ok"):
+            return "ok", ""
+        if submitted.get("conflict"):
+            return "busy", "会话忙"
+        return "fail", str(submitted.get("error") or "未知失败")
 
     @staticmethod
     def _submit_wake_task(
@@ -292,9 +387,9 @@ class Notifier:
         if isinstance(resp, dict) and resp.get("task_id"):
             return {"ok": True, "task_id": resp["task_id"]}
         return {"ok": False, "error": f"未知响应: {resp!r}"}
-    # ── IM 信使（非 console 频道，0.5.0）──
+    # ── IM 信使（非 console 频道，0.5.0；单次化于 0.6.0）──
 
-    async def _wake_via_messenger(
+    async def _messenger_once(
         self,
         agent_id: str,
         user_id: str,
@@ -302,35 +397,26 @@ class Notifier:
         channel: str,
         text: str,
     ) -> tuple:
-        """经插件信使端点唤醒 agent 并把回复送回频道；忙则延后重试。
+        """单次提交信使请求（无内部重试，重试节奏归 flusher）。
 
-        端点内 agent 回合同步执行（上限 300s），HTTP 超时给足余量。
-        409（会话忙）与 console 唤醒同款 30s×20 重试。
+        信使端点 busy（会话门闩/tracker 忙）→ "busy"。
 
         Returns:
-            (ok, reason)：成功时 reason 为 ""。
+            ("ok"|"busy"|"fail", reason)：fail 时 reason 为具体死因。
         """
-        reason = ""
-        for _attempt in range(WAKE_MAX_RETRIES):
-            try:
-                submitted = await asyncio.to_thread(
-                    self._submit_messenger_task,
-                    agent_id, user_id, session_id, channel, text,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug("process-tools 信使提交异常: %s", e)
-                return False, f"{type(e).__name__}: {e}"
-            if submitted.get("ok"):
-                return True, ""
-            if submitted.get("busy"):
-                reason = (
-                    f"会话忙，重试 {WAKE_MAX_RETRIES} 次"
-                    "(约 10 分钟)后仍未成功"
-                )
-                await asyncio.sleep(WAKE_RETRY_SECONDS)
-                continue
-            return False, str(submitted.get("error") or "未知失败")
-        return False, reason
+        try:
+            submitted = await asyncio.to_thread(
+                self._submit_messenger_task,
+                agent_id, user_id, session_id, channel, text,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("process-tools 信使提交异常: %s", e)
+            return "fail", f"{type(e).__name__}: {e}"
+        if submitted.get("ok"):
+            return "ok", ""
+        if submitted.get("busy"):
+            return "busy", "会话忙"
+        return "fail", str(submitted.get("error") or "未知失败")
 
     @staticmethod
     def _submit_messenger_task(
@@ -402,8 +488,6 @@ class Notifier:
                 else f"未知响应: {data!r}"
             ),
         }
-
-    # ── 周期通知 ──
 
     # ── 周期通知 ──
 
