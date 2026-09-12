@@ -211,9 +211,12 @@ def test_run_wake_timeout(monkeypatch):
 def test_router_rejects_missing_fields():
     fastapi = pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient  # noqa: F401
-    from fastapi import FastAPI
+    from fastapi import APIRouter, FastAPI
 
-    router = messenger.create_router()
+    # 0.5.0 修复：信使端点并入既有 router（add_wake_route），
+    # 内核约束插件 HTTP prefix 插件级唯一，禁止独立注册
+    router = APIRouter()
+    messenger.add_wake_route(router)
     app = FastAPI()
     app.include_router(router, prefix="/process-tools")
     client = TestClient(app)
@@ -223,3 +226,14 @@ def test_router_rejects_missing_fields():
         json={"channel": "wecom", "session_id": "", "text": "x"},
     )
     assert resp.status_code == 400
+
+
+def test_web_api_router_contains_wake_channel():
+    """web_api.create_router() 单 router 双端点：chat-status + wake-channel。"""
+    pytest.importorskip("fastapi")
+    import web_api
+
+    router = web_api.create_router()
+    paths = {r.path for r in router.routes}
+    assert "/chat-status" in paths
+    assert "/wake-channel" in paths
