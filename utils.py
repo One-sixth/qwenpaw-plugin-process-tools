@@ -348,6 +348,10 @@ def parse_env(value) -> Tuple[Optional[dict], Optional[str]]:
         s = value.strip()
         if not s:
             return None, None
+        if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
+            # LLM 偶发把 JSON 对象字符串整体再包一层引号：剥一次即可
+            # （同 parse_process_ids 外围引号容错，仅此一种不递归）。
+            s = s[1:-1].strip()
         import json
 
         try:
@@ -442,6 +446,10 @@ def parse_process_ids(value) -> Tuple[Optional[list], Optional[str]]:
     v = value
     if isinstance(v, str):
         s = v.strip()
+        if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
+            # LLM 偶发把 JSON 数组字符串整体再包一层引号："[\"1\", \"2\"]"
+            # → 只剥一次最外围双引号，不递归（作者拍板：仅兼容这一种）。
+            s = s[1:-1].strip()
         if s.startswith("["):
             import json
 
@@ -449,6 +457,8 @@ def parse_process_ids(value) -> Tuple[Optional[list], Optional[str]]:
                 v = json.loads(s)
             except ValueError:
                 return None, f"process_id 参数无法解析：「{truncate_line(s, 60)}」"
+        else:
+            v = s
     items = list(v) if isinstance(v, (list, tuple)) else [v]
     if not items:
         return None, "process_id 列表为空"
@@ -464,7 +474,7 @@ def parse_process_ids(value) -> Tuple[Optional[list], Optional[str]]:
 
 # ── shell 选择 ──────────────────────────────────────────
 
-SHELL_CHOICES = ("default", "pwsh", "bash")
+SHELL_CHOICES = ("auto", "pwsh", "bash")
 
 _PWSH_FLAGS = ["-NoProfile", "-NonInteractive", "-Command"]
 
@@ -472,37 +482,46 @@ _PWSH_FLAGS = ["-NoProfile", "-NonInteractive", "-Command"]
 def resolve_shell_argv(spec: str) -> Tuple[Optional[list], Optional[str], Optional[str]]:
     """shell 参数 → (argv 前缀, 实际使用的 shell 名, 错误消息)。
 
-    default：Windows 优先 pwsh（powershell 兜底、再退 cmd.exe），
-    POSIX 优先 bash（退 /bin/sh）。显式选 pwsh/bash 但找不到 → 报错
-    引导改用 default，不静默换壳。
+    auto：Windows pwsh > powershell > cmd.exe；Linux bash > /bin/sh；
+    macOS zsh > bash > /bin/sh。显式选 pwsh/bash 但找不到 → 报错
+    引导改用 auto，不静默换壳。旧值 "default" 等同 auto（升级兼容别名）。
     """
     import shutil
+    import sys
 
-    spec = str(spec or "default").strip().lower()
+    spec = str(spec or "auto").strip().lower()
+    if spec == "default":
+        # 0.4.4 起 default 改名 auto；旧值静默映射，防升级期调用报错
+        spec = "auto"
     if spec not in SHELL_CHOICES:
         return None, None, f"shell 参数应为 {' / '.join(SHELL_CHOICES)}，收到「{spec}」"
     if os.name == "posix":
         if spec == "pwsh":
             exe = shutil.which("pwsh") or shutil.which("powershell")
             if not exe:
-                return None, None, "未找到 pwsh/powershell，可改 shell=\"default\"(bash)"
+                return None, None, '未找到 pwsh/powershell，可改 shell="auto"(bash)'
             return [exe, *_PWSH_FLAGS], "pwsh", None
         bash = shutil.which("bash")
         if spec == "bash":
             if not bash:
-                return None, None, "未找到 bash，可改 shell=\"default\""
+                return None, None, '未找到 bash，可改 shell="auto"'
             return [bash, "-c"], "bash", None
+        # auto：macOS zsh > bash > /bin/sh；Linux bash > /bin/sh
+        if sys.platform == "darwin":
+            zsh = shutil.which("zsh")
+            if zsh:
+                return [zsh, "-c"], "zsh", None
         return [bash or "/bin/sh", "-c"], ("bash" if bash else "sh"), None
     # Windows
     if spec == "bash":
         bash = shutil.which("bash")
         if not bash:
-            return None, None, "未找到 bash（Git Bash?），可改 shell=\"default\"(pwsh)"
+            return None, None, '未找到 bash（Git Bash?），可改 shell="auto"(pwsh)'
         return [bash, "-c"], "bash", None
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     if spec == "pwsh":
         if not pwsh:
-            return None, None, "未找到 pwsh/powershell，可改 shell=\"default\" 或 \"bash\""
+            return None, None, '未找到 pwsh/powershell，可改 shell="auto" 或 "bash"'
         return [pwsh, *_PWSH_FLAGS], "pwsh", None
     if pwsh:
         return [pwsh, *_PWSH_FLAGS], "pwsh", None

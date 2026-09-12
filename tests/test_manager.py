@@ -9,7 +9,6 @@ import pytest
 
 from helpers import py_cmd, run
 from manager import (
-    MAX_RUNNING_PER_SESSION,
     RING_LIMIT,
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -66,29 +65,27 @@ def test_id_monotonic_not_reused():
     run(main())
 
 
-def test_concurrency_cap():
+def test_many_concurrent_processes():
+    """0.4.4 移除并发上限：同时 8 个运行中进程全部正常存活。"""
     async def main():
         m = get_manager()
-        procs = []
-        for _ in range(MAX_RUNNING_PER_SESSION):
-            procs.append(await m.start(py_cmd("import time; time.sleep(30)")))
-        with pytest.raises(RuntimeError):
-            await m.start(py_cmd("print('nope')"))
+        procs = [
+            await m.start(py_cmd("import time; time.sleep(30)"))
+            for _ in range(8)
+        ]
+        for mp in procs:
+            assert mp.status == STATUS_RUNNING
         for mp in procs:
             await mp.kill()
-        # 名额释放
-        ok = await m.start(py_cmd("print('slot freed')"))
-        assert await ok.wait(timeout=60) == 0
-        assert ok.num == MAX_RUNNING_PER_SESSION + 1
 
     run(main())
 
 
 def test_finished_process_not_counted():
-    """已结束进程不占并发名额：启动→结束 交替 7 轮不被上限 5 卡住。"""
+    """启动→结束 交替 7 轮正常工作（旧并发上限时代的名额语义已随上限移除）。"""
     async def main():
         m = get_manager()
-        for i in range(MAX_RUNNING_PER_SESSION + 2):
+        for i in range(7):
             mp = await m.start(py_cmd(f"print({i})"))
             assert await mp.wait(timeout=60) == 0
 

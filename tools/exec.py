@@ -52,9 +52,9 @@ async def process_tools_exec(
     detach: bool = False,
     encoding: str = "auto",
     no_shell: bool = False,
-    shell: str = "default",
+    shell: str = "auto",
 ):
-    """启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_wait 主动收口、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令默认在 shell=pwsh（Windows）/ bash（POSIX）下以管道方式执行、无 TTY（未安装时回落 cmd/sh）；进度条类程序会自行降级为普通输出。每个会话同时最多有 5 个运行中进程，已结束的不占名额。detach=True 时改为启动完全不受本插件托管的 OS 进程（只回 PID，管道/超时/通知等托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启、不经 shell。
+    """启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_wait 等待进程结束、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令默认在 shell=auto 下由选中的解释器以管道方式执行（Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落），无 TTY；进度条类程序会自行降级为普通输出。返回信息会写明实际使用的 shell 与编码。detach=True 时改为启动完全不受本插件托管的 OS 进程（只回 PID，管道/超时/通知等托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启、不经 shell。
 
     Args:
         command: 要执行的 shell 命令字符串（语法随 shell 参数，跨平台自行负责）；no_shell=True 时改传 argv 列表（如 ["python", "-c", "print(1)"]，或其 JSON 数组字符串）。
@@ -63,15 +63,16 @@ async def process_tools_exec(
         cwd: 工作目录，相对路径相对于 workspace。空串表示使用 workspace 目录。
         max_output_chars: 前台模式返回输出的字符上限，超出则截断并提示完整日志路径，上限 16384。
         name: 给人看的进程标签（≤80 字符），出现在 exec/check/list 与通知里，多进程并跑时方便认亲；纯展示不影响执行。
-        env: 增量环境变量（如 {"PYTHONUNBUFFERED": "1"}），在宿主环境之上叠加、只对本进程生效。
+        env: 增量环境变量，传 JSON 字典（如 {"PYTHONUNBUFFERED": "1"}），在宿主环境之上叠加、只对本进程生效。
         hide_window: Windows 下隐藏子进程的控制台窗口（CREATE_NO_WINDOW），跑不该弹窗的脚本时用；POSIX 忽略，与 detach=True 无叠加意义。
-        detach: True 时启动完全不受本插件控制的脱离进程：立即返回 OS 级 PID（不是 #N 编号），无 stdin/stdout/stderr 管道（输出丢弃，需要就自己在 command 里重定向）、无超时、不进注册表（list/check/communicate/notice 都看不到它）、宿主退出不被清理、不占并发名额。之后管理需用系统命令按 PID 自理（Windows taskkill /F /T /PID、POSIX kill；注意 PID 是 shell 进程，杀整树要 /T）。background/timeout/max_output_chars/encoding 参数失效。
+        detach: True 时启动完全不受本插件控制的脱离进程：立即返回 OS 级 PID（不是 #N 编号），无 stdin/stdout/stderr 管道（输出丢弃，需要就自己在 command 里重定向）、无超时、不进注册表（list/check/communicate/notice 都看不到它）、宿主退出不被清理、不占名额。之后管理需用系统命令按 PID 自理（Windows taskkill /F /T /PID、POSIX kill；注意 PID 是 shell 进程，杀整树要 /T）。background/timeout/max_output_chars/encoding 参数失效。
         encoding: 管道编解码 codec（输出解码与 stdin 编码共用）。auto（默认）=本机原生编码（Windows 取控制台码页，中文系统即 GBK，返回信息会写明实际值）；输出乱码或 stdin 中文失配时显式指定（如 utf-8 / gbk / cp437），未知 codec 会报错。
         no_shell: True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。注意直启目标本身就是 cmd/sh 类解释器时，它会再解析自己的命令行，元字符免疫只对 argv 传参的真程序（python/git 等）有效。
-        shell: 命令解释器：default（推荐——Windows 优先 pwsh、POSIX 优先 bash，未安装自动回落 cmd/sh）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。
+        shell: 命令解释器：auto（默认——Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落；旧值 default 等同 auto）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。显式选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。
     """
     # ── 参数规范化 ──
     display_command = ""
+    shell_used: Optional[str] = None
     if no_shell:
         argv, argv_err = parse_argv(command)
         if argv_err:
@@ -86,23 +87,24 @@ async def process_tools_exec(
         if not command or not str(command).strip():
             return make_error("启动进程", "command 为空", "请提供要执行的命令")
         display_command = str(command)
-        # shell 枚举：default→pwsh(Windows)/bash(POSIX)，包装成 argv 直启
+        # shell 枚举：auto→按平台可用性选壳，包装成 argv 直启
         # （不经 create_subprocess_shell 的系统默认壳）
-        prefix, _shell_used, shell_err = resolve_shell_argv(shell)
+        prefix, shell_used, shell_err = resolve_shell_argv(shell)
         if shell_err:
             return make_error("启动进程", shell_err)
         spawn_target = [*prefix, str(command)]
+    shell_line = f'shell="{shell_used}"\n' if shell_used else ""
 
     enc_name, enc_auto, enc_err = resolve_encoding(encoding)
     if enc_err:
         return make_error("启动进程", enc_err)
     if enc_auto:
         enc_note = (
-            f"stdin/stdout/stderr encoding={enc_name}"
-            "（auto=本机编码；若输出一堆 ??? 乱码请显式调整 encoding，如 utf-8）"
+            f'stdin/stdout/stderr encoding="{enc_name}" '
+            '(auto=本机编码；若输出很多 "??" 或 乱码请显式调整 encoding，如 utf-8)'
         )
     else:
-        enc_note = f"stdin/stdout/stderr encoding={enc_name}"
+        enc_note = f'stdin/stdout/stderr encoding="{enc_name}"'
 
     clean_env, env_err = parse_env(env)
     if env_err:
@@ -138,8 +140,9 @@ async def process_tools_exec(
             logger.exception("process_tools_exec detach 启动失败")
             return make_error("启动进程", f"启动出错：{e}")
         label = f"「{str(name or '').strip()[:80]}」" if str(name or "").strip() else ""
+        shell_part = f'shell="{shell_used}"，' if shell_used else ""
         return make_success(
-            f"脱离进程 {label}已启动（pid={pid}，不受本插件托管）\n"
+            f"脱离进程 {label}已启动（pid={pid}，{shell_part}不受本插件托管）\n"
             f"命令：{truncate_line(display_command, 120)}\n"
             "该进程无管道无日志、不占名额、宿主退出后继续运行；"
             "list/check/communicate/notice 对它全部无效。"
@@ -172,6 +175,7 @@ async def process_tools_exec(
             f"进程 #{mp.num}{'「' + mp.name + '」' if mp.name else ''} "
             f"已启动（pid={mp.pid}）\n"
             f"命令：{truncate_line(mp.command, 120)}\n"
+            f"{shell_line}"
             f"{enc_note}\n"
             f"日志：{mp.log_path}\n"
             f"后续可用 process_tools_check({mp.num}) 查状态、"
@@ -210,7 +214,9 @@ async def process_tools_exec(
     label = f"「{mp.name}」" if mp.name else ""
     header = (
         f"进程 #{mp.num}{label} 结束（exit={mp.exit_code}，用时 {mins}m{secs:02d}s）\n"
-        f"命令：{truncate_line(mp.command, 120)}\n{enc_note}"
+        f"命令：{truncate_line(mp.command, 120)}\n"
+        f"{shell_line}"
+        f"{enc_note}"
     )
     if len(output) > mo_chars:
         return make_success(

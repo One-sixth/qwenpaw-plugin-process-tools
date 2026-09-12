@@ -169,8 +169,8 @@ class _Recorder:
     def __init__(self):
         self.calls = []
 
-    async def fake(self, mp_key, text, wake_agent, wake_channel="console"):
-        self.calls.append((mp_key, text, wake_agent, wake_channel))
+    async def fake(self, mp_key, text, wake_channel="console"):
+        self.calls.append((mp_key, text, wake_channel))
         return "记录✅"
 
 
@@ -181,7 +181,7 @@ def test_notice_completion_fires(monkeypatch):
     async def main():
         await process_tools_exec(py_cmd("print('noticed-output')"), background=True)
         mp = get_manager().get(1)
-        c = await process_tools_notice(1, interval_seconds=0, wake_agent=False)
+        c = await process_tools_notice(1, interval_seconds=0)
         assert not is_error(c) and "仅完成通知" in chunk_text(c)
         assert await mp.wait(timeout=60) == 0
         # 监听器是 create_task，给一点调度时间
@@ -189,9 +189,8 @@ def test_notice_completion_fires(monkeypatch):
         while time.time() < deadline and not rec.calls:
             await asyncio.sleep(0.05)
         assert rec.calls, "完成通知未发出"
-        _key, text, wake, _chan = rec.calls[0]
+        _key, text, _chan = rec.calls[0]
         assert "已完成" in text and "noticed-output" in text
-        assert wake is False
 
     run(main())
 
@@ -243,9 +242,9 @@ def test_send_completion_concurrent_double_delivers_once(monkeypatch):
     只能执行一次（检查+置位同一同步段，中间不得有 await）。
     旧落点「notice 立即投递」已随 0.4.2 设计废除。"""
     class SlowRec(_Recorder):
-        async def fake(self, mp_key, text, wake_agent, wake_channel="console"):
+        async def fake(self, mp_key, text, wake_channel="console"):
             await asyncio.sleep(0.3)
-            self.calls.append((mp_key, text, wake_agent, wake_channel))
+            self.calls.append((mp_key, text, wake_channel))
             return "记录✅"
 
     rec = SlowRec()
@@ -282,3 +281,28 @@ def test_exec_bad_cwd_returns_error(monkeypatch):
     assert "启动失败" in text and "已消耗" in text
     # 绝不能留下注册表里的活进程
     assert get_manager().list_session() == []
+
+
+# ── list：limit 截断 + 新→旧排序（0.4.4） ──
+
+
+def test_list_limit_and_newest_first():
+    """默认新进程在前；limit=2 只显最新 2 个并提示看全部；limit=0 全列。"""
+    async def main():
+        # 依次创建 3 个进程（编号单调分配，num 递增即创建顺序）
+        for i in range(3):
+            c = await process_tools_exec(py_cmd(f"print({i})"))
+            assert not is_error(c)
+
+        text = chunk_text(await process_tools_list())
+        assert text.index("#3 [") < text.index("#2 [") < text.index("#1 ["), \
+            f"应新进程在前：{text}"
+
+        text2 = chunk_text(await process_tools_list(limit=2))
+        assert "#3 [" in text2 and "#1 [" not in text2
+        assert "limit=0" in text2, "截断时应提示 limit=0 看全部"
+
+        text0 = chunk_text(await process_tools_list(limit=0))
+        assert "#1 [" in text0 and "#3 [" in text0
+
+    run(main())

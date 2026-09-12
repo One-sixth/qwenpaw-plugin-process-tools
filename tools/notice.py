@@ -40,14 +40,12 @@ logger = logging.getLogger(__name__)
 async def process_tools_notice(
     process_id,
     interval_seconds: int = 0,
-    wake_agent: bool = True,
 ):
-    """为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队（agent 回合进行中会等其空闲后再投递）。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。只能给运行中的进程注册；对已结束进程注册会返回错误（结果请用 process_tools_check 获取）。
+    """若要动态接收后台进程状态的周期通知或结束通知，必须调用本工具注册进程状态通知：进程结束时推送一次完成通知；interval_seconds≥30 时每隔该秒数推送进度快照，长任务推荐 ≥900。注册后无需再用 wait 等待进程结束——系统会自动把通知发到用户侧并唤醒 agent。只能给运行中的进程注册，已结束进程返回错误（用 process_tools_check 获取结果）。
 
     Args:
         process_id: 进程编号 #N（支持 1、"1"、"#1" 三种写法）。
-        interval_seconds: 周期通知间隔秒数。0（默认）=只在结束时通知；≥30 生效；1~29 视为非法。推荐 ≥900。
-        wake_agent: 通知是否唤醒 agent 触发回复，默认 True。False 时只发用户可见的通知气泡。
+        interval_seconds: 周期通知间隔秒数。0（默认）=仅完成通知；1~29 非法；≥30 生效。
     """
     num, err = parse_process_id(process_id)
     if err or num is None:
@@ -90,23 +88,19 @@ async def process_tools_notice(
         _cancel_existing(existing)
         if interval >= MIN_INTERVAL_SECONDS:
             existing.interval_seconds = interval
-            existing.wake_agent = bool(wake_agent)
             notifier.register(mp, existing)
             return make_success(
-                f"进程 #{num} 通知已更新：每 {interval}s 进度 +"
-                f" 完成通知（wake_agent={bool(wake_agent)}）",
+                f"进程 #{num} 通知已更新：每 {interval}s 进度 + 完成通知",
             )
         existing.interval_seconds = 0
-        existing.wake_agent = bool(wake_agent)
         return make_success(
-            f"进程 #{num} 通知已更新：仅完成通知（wake_agent={bool(wake_agent)}）",
+            f"进程 #{num} 通知已更新：仅完成通知",
         )
 
     notice = Notice(
         process_num=num,
         session_key=key,
         interval_seconds=interval,
-        wake_agent=bool(wake_agent),
         wake_channel=current_channel(),
     )
     notifier.register(mp, notice)
@@ -115,8 +109,7 @@ async def process_tools_notice(
     else:
         desc = "仅完成通知"
     return make_success(
-        f"进程 #{num} 已注册通知：{desc}（wake_agent={bool(wake_agent)}）。"
-        "不注册则进程结束不会有任何推送。"
+        f"进程 #{num} 已注册通知：{desc}"
     )
 
 
