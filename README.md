@@ -31,7 +31,7 @@ QwenPaw 内置的 `execute_shell_command` 是为「快速命令」设计的，�
 | `process_tools_check` | 查单个进程状态 + 输出日志尾部 |
 | `process_tools_wait` | 等待一个/一批进程结束（超时只报「仍运行中」，绝不杀进程） |
 | `process_tools_communicate` | 与进程交互：写入 stdin、增量读 stdout、发中断/强杀 |
-| `process_tools_notice` | 注册完成/周期通知：进程结束时气泡提醒 + 自动唤醒 agent 处理 |
+| `process_tools_notice` | 注册完成/周期通知：完成后按会话聚合（3s 窗口），气泡提醒 + 自动唤醒 agent 处理 |
 
 ## 相比内置命令
 
@@ -96,7 +96,7 @@ qwenpaw app
 ## 已知限制
 
 - 无前端终端模拟（xterm）——进程输出走日志与增量读取
-- 非 console 频道（dingtalk/feishu/qq/wecom…）的通知为「信使模式」：完成/周期通知会唤醒 agent 跑一轮并把回复送回频道（单向通知文本不直接进 IM）；agent 忙碌超过重试上限（约 10 分钟）则通知过期
-- 唤醒排队有上限（约 10 分钟）：agent 连续繁忙超时则通知过期，气泡仍在
+- 非 console 频道（dingtalk/feishu/qq/wecom…）的通知为「信使模式」：完成/周期通知会唤醒 agent 跑一轮并把回复送回频道（单向通知文本不直接进 IM）
+- 同会话通知聚合投递：3s 窗口内多条通知合并为一条消息/一个唤醒回合；会话忙则以 3s 粒度忙等（无上限、永不放弃，通知仅内存态——宿主关闭即丢）
 - 环形缓冲仅 512KB，更早的输出读日志文件
 - 极短进程（exec 返回时已结束）注册通知会报错——直接 `wait` 收结果即可
