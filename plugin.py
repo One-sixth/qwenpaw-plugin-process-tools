@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Process Tools 插件入口。
 
-注册 5 个托管多进程工具到 QwenPaw Agent 工具箱。
-架构蓝本：《AI_MED_UI 进程工具设计》（v1 = subprocess+管道，无 PTY）。
+注册 6 个托管多进程工具到 QwenPaw Agent 工具箱。
 
 0.2.0 起附前端伴生组件：HTTP 轻量端点（session-fp 指纹）+ 浏览器轮询
 脚本（frontend/index.js），解决唤醒/后台任务落盘后 WebUI 不刷新的问题。

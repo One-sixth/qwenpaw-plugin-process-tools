@@ -101,20 +101,16 @@ def test_deliver_wake_routing_and_channel_guard(monkeypatch):
     key = ("agent-1", "user-x", "sess-9")
 
     # 非 console：跳过唤醒但气泡仍投（session_id 定位不受影响）
-    r = run(nt.deliver(key, "正文", True, wake_channel="matrix"))
+    r = run(nt.deliver(key, "正文", wake_channel="matrix"))
     assert woken == []
     assert "matrix" in r and "唤醒⏭️" in r and "气泡✅" in r
     assert pushed == [("sess-9", True)]
 
     # console：唤醒带真实 (agent_id, user_id, session_id) 三元组
-    r = run(nt.deliver(key, "正文2", True, wake_channel="console"))
+    # （0.4.4 起气泡+唤醒固定双投递，无 wake_agent 开关）
+    r = run(nt.deliver(key, "正文2", wake_channel="console"))
     assert woken == [("agent-1", "user-x", "sess-9")]
     assert "唤醒✅" in r
-
-    # wake_agent=False：不唤醒
-    r = run(nt.deliver(key, "正文3", False, wake_channel="console"))
-    assert "唤醒" not in r
-    assert len(woken) == 1
 
 
 def test_deliver_surfaces_wake_failure_reason(monkeypatch):
@@ -133,7 +129,7 @@ def test_deliver_surfaces_wake_failure_reason(monkeypatch):
     monkeypatch.setattr(Notifier, "_try_wake", fake_wake_fail)
 
     nt = Notifier()
-    r = run(nt.deliver(("a", "u", "s"), "正文", True, wake_channel="console"))
+    r = run(nt.deliver(("a", "u", "s"), "正文", wake_channel="console"))
     assert "唤醒❌(RuntimeError: 连接被拒绝)" in r
     assert "气泡✅" in r
 
@@ -197,8 +193,7 @@ def test_notice_immediate_path_retired_no_delivery(monkeypatch):
 
     calls = []
 
-    async def fake_deliver(self, mp_key, text, wake_agent,
-                           wake_channel="console"):
+    async def fake_deliver(self, mp_key, text, wake_channel="console"):
         calls.append(wake_channel)
         return "记录✅"
 

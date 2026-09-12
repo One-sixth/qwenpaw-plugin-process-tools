@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
 """进程注册表与托管进程内核。
 
-架构沿用《AI_MED_UI 进程工具设计》：
-
 - 注册表 key = (agent_id, user_id, session_id)，跨会话不可见不可操作；
-- `#N` 按会话单调分配、永不复用；每会话并发运行上限 5（已结束不占名额）；
-- 子进程走 asyncio.create_subprocess_shell（v1 无 PTY，管道合并
-  stderr→stdout 模拟单流），单一 reader 任务读 stdout（避免设计文档
-  §4.3 的 executor/os.read 取消残留问题——asyncio StreamReader 由
-  事件循环内部 add_reader 驱动，天然安全）；
-- 输出三路之 v1 两路：512KB 环形缓冲（供 read_stdout 回放）+
+- `#N` 按会话单调分配、永不复用；
+- 子进程走 asyncio.create_subprocess_shell（无 PTY，管道合并
+  stderr→stdout 模拟单流），单一 reader 任务读 stdout（asyncio
+  StreamReader 由事件循环内部 add_reader 驱动，天然安全）；
+- 输出三路之两路：512KB 环形缓冲（供 read_stdout 回放）+
   净化日志落盘（供 check/notice/用户读取）；
-- 共享 _exit_future 用 asyncio.shield 保护（设计文档 §4.7 教训：
-  wait_for 超时取消会沿 await 链撕毁共享 future，伤害其他等待者）；
+- 共享 _exit_future 用 asyncio.shield 保护（wait_for 超时取消会沿
+  await 链撕毁共享 future，伤害其他等待者）；
 - 前台等待被取消时尽力 kill + 短等，绝不留孤儿；
 - 应用 shutdown 时托管进程全部终止。
 
@@ -63,7 +60,6 @@ logger = logging.getLogger(__name__)
 
 RING_LIMIT = 512 * 1024  # 环形缓冲上限（字节），同设计文档
 READ_CHUNK = 4096
-MAX_RUNNING_PER_SESSION = 5
 KILL_GRACE_SECONDS = 3.0
 LOG_KEEP_DAYS = 30
 
@@ -625,7 +621,7 @@ class ProcessManager:
         """在当前会话注册表启动一个托管进程。
 
         Raises:
-            RuntimeError: 并发运行数达到上限
+            RuntimeError: command 为空，或启动失败（编号已消耗）
         """
         key = session_key()
         if isinstance(command, (list, tuple)):
@@ -633,12 +629,6 @@ class ProcessManager:
                 raise RuntimeError("command 不能为空")
         elif not str(command or "").strip():
             raise RuntimeError("command 不能为空")
-        if self._running_count(key) >= MAX_RUNNING_PER_SESSION:
-            raise RuntimeError(
-                f"本会话运行中进程已达上限 {MAX_RUNNING_PER_SESSION} 个，"
-                "请先用 process_tools_check/communicate 结束部分进程，"
-                "或等待其完成（已结束进程不占名额）",
-            )
         num = self._alloc_id(key)
         log_path = os.path.join(
             get_data_dir(),

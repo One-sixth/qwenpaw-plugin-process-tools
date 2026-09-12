@@ -203,7 +203,7 @@ def test_auto_encoding_reported_in_return():
     chunk = run(process_tools_exec(py_cmd("print('ae')")))
     assert not is_error(chunk)
     text = _text(chunk)
-    assert "encoding=" in text
+    assert 'encoding="' in text
     assert "auto=本机编码" in text
 
 
@@ -211,7 +211,7 @@ def test_explicit_encoding_reported_no_auto_hint():
     """显式 encoding：标注实际 codec，无 auto 提示语。"""
     chunk = run(process_tools_exec(py_cmd("print(1)"), encoding="utf-8"))
     text = _text(chunk)
-    assert "encoding=utf-8" in text
+    assert 'encoding="utf-8"' in text
     assert "auto=本机编码" not in text
 
 
@@ -272,7 +272,7 @@ def test_auto_decodes_native_gbk_cmd_output():
     chunk = run(process_tools_exec("cmd /c chcp"))
     text = _text(chunk)
     assert "活动代码页" in text, f"auto 未正确解码 GBK：{text!r}"
-    assert "encoding=gbk" in text or "encoding=cp936" in text
+    assert 'encoding="gbk"' in text or 'encoding="cp936"' in text
 
 
 def test_stdin_encoding_roundtrip_gbk():
@@ -419,8 +419,8 @@ def _which(*names):
     return None
 
 
-def test_shell_default_is_pwsh_on_windows():
-    """Windows default 走 pwsh：PS 专属命令 Write-Output 成功。"""
+def test_shell_auto_is_pwsh_on_windows():
+    """Windows auto 走 pwsh：PS 专属命令 Write-Output 成功。"""
     if os.name != "nt" or not _which("pwsh", "powershell"):
         import pytest
 
@@ -431,8 +431,8 @@ def test_shell_default_is_pwsh_on_windows():
     assert "PS-DEFAULT" in text and "exit=0" in text
 
 
-def test_shell_default_is_bash_on_posix():
-    """POSIX default 走 bash：$BASH_VERSION 非空。"""
+def test_shell_auto_is_bash_on_posix():
+    """POSIX auto 走 bash：$BASH_VERSION 非空。"""
     if os.name == "nt" or not _which("bash"):
         import pytest
 
@@ -488,10 +488,12 @@ def test_no_shell_ignores_shell_param():
 
 
 def test_shell_wrap_keeps_display_clean():
-    """pwsh 包装不进回显：命令行是用户原文，不见 -NoProfile。"""
+    """pwsh 包装不进命令回显：命令行是用户原文，不见 -NoProfile；
+    返回信息单独一行报告实际使用的 shell（0.4.4 起）。"""
     chunk = run(
         process_tools_exec(py_cmd("print(1)"), background=True),
     )
     text = _text(chunk)
-    assert "NoProfile" not in text and "pwsh" not in text.lower()
+    assert "NoProfile" not in text
+    assert 'shell="' in text
     assert sys.executable in text

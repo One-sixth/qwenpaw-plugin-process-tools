@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """通知系统：注册制 + 完成/周期通知 + 双投递（气泡 / 唤醒）。
 
-沿用《AI_MED_UI 进程工具设计》§4.6 的核心语义：
+核心语义：
 
 - **opt-in**：后台进程不自动推送任何东西，必须显式 notice 注册；
 - **完成通知幂等**：`completion_sent` 标记防重复；
@@ -50,7 +50,6 @@ class Notice:
     process_num: int
     session_key: tuple
     interval_seconds: int = 0  # 0 = 仅完成通知
-    wake_agent: bool = True
     # 注册时的频道快照（contextvar）：/chat/task 只服务 console 会话，
     # 非 console 投递会因 (session_id,user_id,channel) 全等匹配失败而
     # 凭空创建幽灵 chat（v0.1.2 教训），故非 console 直接跳过唤醒。
@@ -141,13 +140,13 @@ class Notifier:
         self,
         mp_key: tuple,
         text: str,
-        wake_agent: bool,
         wake_channel: str = "console",
     ) -> str:
         """把通知投出去，返回投递情况描述。
 
         mp_key = (agent_id, user_id, session_id)
         wake_channel = 注册通知时快照的频道，非 console 跳过任务唤醒。
+        气泡+唤醒固定双投递（0.4.4 删除 wake_agent 参数：注册即想被叫醒）。
         """
         agent_id, user_id, session_id = mp_key
         report = []
@@ -160,25 +159,24 @@ class Notifier:
         except Exception as e:  # noqa: BLE001
             logger.debug("process-tools 通知气泡投递失败: %s", e)
             report.append(f"气泡❌({type(e).__name__})")
-        # 2) 唤醒 agent（同 submit_to_agent 的官方路径）
-        if wake_agent:
-            if wake_channel != "console":
-                # /chat/task 端点固定走 console 通道；非 console 会话
-                # 三元组匹配不上，只会凭空造出一个幽灵 chat——跳过。
-                report.append(
-                    f"唤醒⏭️(未投递:{wake_channel}频道不支持任务唤醒)",
-                )
+        # 2) 唤醒 agent（同 submit_to_agent 的官方路径，固定执行）
+        if wake_channel != "console":
+            # /chat/task 端点固定走 console 通道；非 console 会话
+            # 三元组匹配不上，只会凭空造出一个幽灵 chat——跳过。
+            report.append(
+                f"唤醒⏭️(未投递:{wake_channel}频道不支持任务唤醒)",
+            )
+        else:
+            ok, reason = await self._try_wake(
+                agent_id, user_id, session_id, text,
+            )
+            if ok:
+                report.append("唤醒✅")
             else:
-                ok, reason = await self._try_wake(
-                    agent_id, user_id, session_id, text,
+                logger.warning(
+                    "process-tools 唤醒投递失败: %s", reason,
                 )
-                if ok:
-                    report.append("唤醒✅")
-                else:
-                    logger.warning(
-                        "process-tools 唤醒投递失败: %s", reason,
-                    )
-                    report.append(f"唤醒❌({reason})")
+                report.append(f"唤醒❌({reason})")
         return " ".join(report)
 
     async def _send_completion(self, mp: "ManagedProcess", notice: Notice) -> None:
@@ -187,7 +185,7 @@ class Notifier:
         notice.completion_sent = True
         text = self.build_completion_text(mp)
         result = await self.deliver(
-            mp.key, text, notice.wake_agent, notice.wake_channel,
+            mp.key, text, notice.wake_channel,
         )
         logger.info("proc #%d 完成通知已投递：%s", mp.num, result)
 
@@ -288,7 +286,7 @@ class Notifier:
                         break
                     text = self.build_periodic_text(mp)
                     await self.deliver(
-                        mp.key, text, notice.wake_agent,
+                        mp.key, text,
                         notice.wake_channel,
                     )
             except asyncio.CancelledError:

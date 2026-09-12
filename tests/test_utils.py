@@ -75,3 +75,56 @@ def test_session_token_cross_process_stable(tmp_dir):
         capture_output=True, text=True, env=env, check=True,
     )
     assert out.stdout.strip() == sanitize_session_token("a|b|c")
+
+# ── parse_process_ids：外围引号容错（0.4.4） ──
+
+
+def test_parse_process_ids_quoted_forms():
+    """LLM 偶发把 JSON 数组字符串整体再包一层双引号：
+    只剥一次最外围双引号后按原逻辑解析（作者拍板：仅兼容这一种）。"""
+    from utils import parse_process_ids
+
+    # 标准形式不回归
+    assert parse_process_ids([1, "2"]) == ([1, 2], None)
+    assert parse_process_ids("[1, 2]") == ([1, 2], None)
+    assert parse_process_ids('["1", "#2"]') == ([1, 2], None)
+    # 外围多包一层双引号 → 剥一次后正常解析（目标场景）
+    assert parse_process_ids('"[1, 2]"') == ([1, 2], None)
+    assert parse_process_ids('"["1", "2"]"') == ([1, 2], None)
+    # 单个编号被引号包裹 → 剥一次后按单编号接受
+    assert parse_process_ids('"3"') == ([3], None)
+    assert parse_process_ids('"#4"') == ([4], None)
+    # 只剥一次：两层引号剥掉外层后不再递归 → parse_int 拒绝
+    value, err = parse_process_ids('""5""')
+    assert value is None and err
+    # 单引号数组不在兼容范围（只做双引号）：剥完 json.loads 仍失败
+    value, err = parse_process_ids('"[\'1\', \'2\']"')
+    assert value is None and err
+    # 坏 JSON 仍报错
+    value, err = parse_process_ids('["1", oops]')
+    assert value is None and err
+
+
+# ── parse_env：外围引号容错（0.4.4，同 parse_process_ids 手法） ──
+
+
+def test_parse_env_quoted_json_object():
+    """LLM 偶发把 JSON 对象字符串整体再包一层双引号：剥一次后正常解析。"""
+    from utils import parse_env
+
+    # 标准形式不回归
+    assert parse_env({"A": "1"}) == ({"A": "1"}, None)
+    assert parse_env('{"A": "1"}') == ({"A": "1"}, None)
+    # 数值自动转 str
+    assert parse_env({"PORT": 8080}) == ({"PORT": "8080"}, None)
+    # 外围多包一层双引号 → 剥一次后正常解析（目标场景）
+    import json as _json
+
+    quoted = '"' + _json.dumps({"A": "1"}) + '"'
+    assert parse_env(quoted) == ({"A": "1"}, None)
+    # 只剥一次：两层引号剥掉外层后不是合法 JSON → 报错
+    value, err = parse_env('""A""')
+    assert value is None and err
+    # 坏 JSON 仍报错
+    value, err = parse_env('{"A": oops}')
+    assert value is None and err

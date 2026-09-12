@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_exec",
-      "description": "启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_wait 主动收口、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令默认在 shell=pwsh（Windows）/ bash（POSIX）下以管道方式执行、无 TTY（未安装时回落 cmd/sh）；进度条类程序会自行降级为普通输出。每个会话同时最多有 5 个运行中进程，已结束的不占名额。detach=True 时改为启动完全不受本插件托管的 OS 进程（只回 PID，管道/超时/通知等托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启、不经 shell。",
+      "description": "启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_wait 等待进程结束、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令默认在 shell=auto 下由选中的解释器以管道方式执行（Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落），无 TTY；进度条类程序会自行降级为普通输出。返回信息会写明实际使用的 shell 与编码。detach=True 时改为启动完全不受本插件托管的 OS 进程（只回 PID，管道/超时/通知等托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启、不经 shell。",
       "parameters": {
         "properties": {
           "command": {
@@ -46,7 +46,7 @@
           "env": {
             "additionalProperties": true,
             "default": {},
-            "description": "增量环境变量（如 {\"PYTHONUNBUFFERED\": \"1\"}），在宿主环境之上叠加、只对本进程生效。",
+            "description": "增量环境变量，传 JSON 字典（如 {\"PYTHONUNBUFFERED\": \"1\"}），在宿主环境之上叠加、只对本进程生效。",
             "type": "object"
           },
           "hide_window": {
@@ -56,7 +56,7 @@
           },
           "detach": {
             "default": false,
-            "description": "True 时启动完全不受本插件控制的脱离进程：立即返回 OS 级 PID（不是 #N 编号），无 stdin/stdout/stderr 管道（输出丢弃，需要就自己在 command 里重定向）、无超时、不进注册表（list/check/communicate/notice 都看不到它）、宿主退出不被清理、不占并发名额。之后管理需用系统命令按 PID 自理（Windows taskkill /F /T /PID、POSIX kill；注意 PID 是 shell 进程，杀整树要 /T）。background/timeout/max_output_chars/encoding 参数失效。",
+            "description": "True 时启动完全不受本插件控制的脱离进程：立即返回 OS 级 PID（不是 #N 编号），无 stdin/stdout/stderr 管道（输出丢弃，需要就自己在 command 里重定向）、无超时、不进注册表（list/check/communicate/notice 都看不到它）、宿主退出不被清理、不占名额。之后管理需用系统命令按 PID 自理（Windows taskkill /F /T /PID、POSIX kill；注意 PID 是 shell 进程，杀整树要 /T）。background/timeout/max_output_chars/encoding 参数失效。",
             "type": "boolean"
           },
           "encoding": {
@@ -70,8 +70,8 @@
             "type": "boolean"
           },
           "shell": {
-            "default": "default",
-            "description": "命令解释器：default（推荐——Windows 优先 pwsh、POSIX 优先 bash，未安装自动回落 cmd/sh）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。",
+            "default": "auto",
+            "description": "命令解释器：auto（默认——Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落；旧值 default 等同 auto）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。显式选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。",
             "type": "string"
           }
         },
@@ -86,9 +86,15 @@
     "type": "function",
     "function": {
       "name": "process_tools_list",
-      "description": "列出当前会话创建的全部托管进程（每行：编号、状态、退出码、运行时长、命令摘要）。进程按会话隔离，看不到也管不了其他会话的进程。运行中进程超过 5 个时无法再启动新进程，已结束的不占名额。",
+      "description": "列出当前会话创建的全部托管进程（每行：编号、状态、退出码、运行时长、命令摘要）。进程按会话隔离，看不到也管不了其他会话的进程。默认列出最近创建的 10 个，新进程在前；limit≤0 列出全部。",
       "parameters": {
-        "properties": {},
+        "properties": {
+          "limit": {
+            "default": 10,
+            "description": "最多列出的进程数，默认 10（新进程在前）；≤0 = 全部列出。",
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     }
@@ -120,11 +126,11 @@
     "type": "function",
     "function": {
       "name": "process_tools_wait",
-      "description": "前台等待一个或一批后台进程结束（all 语义：全部结束才返回）。适用「background 启动后先干别的，快结束时回来收口」。与前台 exec 的本质区别：本工具只是等待者——超时只报「仍运行中」，绝不杀进程；被取消也只放弃等待，进程不受影响。已结束进程立即幂等返回终态。detach 脱离进程对本插件不可见，无法用本工具等待（需按 PID 用系统命令自理）。",
+      "description": "前台等待一个或一批后台进程结束（all 语义：全部结束才返回）。适用「background 启动后先干别的，快结束时回来等待进程结束」。与前台 exec 的本质区别：本工具只是等待者——超时只报「仍运行中」，绝不杀进程；被取消也只放弃等待，进程不受影响。已结束进程立即幂等返回终态。detach 脱离进程对本插件不可见，无法用本工具等待（需按 PID 用系统命令自理）。",
       "parameters": {
         "properties": {
           "process_id": {
-            "description": "进程编号：单个（1 / \"1\" / \"#1\"）或编号列表（如 [1, 2] 或 JSON 数组字符串 \"[1,2]\"），列表时全部结束才返回（all 语义）。"
+            "description": "进程编号：单个（1 / \"1\" / \"#1\"）或编号列表（如 [1, 2]），列表时全部结束才返回（all 语义）。"
           },
           "timeout": {
             "default": 60,
@@ -133,7 +139,7 @@
           },
           "tail_lines": {
             "default": 20,
-            "description": "每个进程返回的日志尾部行数，默认 20，最大 200；0 = 只回状态行（批量收口时最省 token）。",
+            "description": "每个进程返回的日志尾部行数，默认 20，最大 200；0 = 只回状态行。",
             "type": "integer"
           }
         },
@@ -196,7 +202,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_notice",
-      "description": "为托管进程注册通知（opt-in，不注册则零通知）。进程结束时推送一次完成通知（状态+退出码+用时+日志路径+输出末10行）；interval_seconds≥30 时运行期间每隔该秒数推送进度快照，进程退出自动停止周期通知。通知以用户消息级别送达：QwenPaw 界面弹出通知气泡，且（wake_agent=True 时）唤醒 agent 处理——空闲立即回复，忙碌自动排队（agent 回合进行中会等其空闲后再投递）。周期性轮询烧 token，长任务推荐 interval ≥ 900 或干脆只用完成通知。只能给运行中的进程注册；对已结束进程注册会返回错误（结果请用 process_tools_check 获取）。",
+      "description": "若要动态接收后台进程状态的周期通知或结束通知，必须调用本工具注册进程状态通知：进程结束时推送一次完成通知；interval_seconds≥30 时每隔该秒数推送进度快照，长任务推荐 ≥900。注册后无需再用 wait 等待进程结束——系统会自动把通知发到用户侧并唤醒 agent。只能给运行中的进程注册，已结束进程返回错误（用 process_tools_check 获取结果）。",
       "parameters": {
         "properties": {
           "process_id": {
@@ -204,13 +210,8 @@
           },
           "interval_seconds": {
             "default": 0,
-            "description": "周期通知间隔秒数。0（默认）=只在结束时通知；≥30 生效；1~29 视为非法。推荐 ≥900。",
+            "description": "周期通知间隔秒数。0（默认）=仅完成通知；1~29 非法；≥30 生效。",
             "type": "integer"
-          },
-          "wake_agent": {
-            "default": true,
-            "description": "通知是否唤醒 agent 触发回复，默认 True。False 时只发用户可见的通知气泡。",
-            "type": "boolean"
           }
         },
         "required": [
