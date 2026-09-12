@@ -31,7 +31,7 @@ QwenPaw 内置的 `execute_shell_command` 是为「快速命令」设计的，�
 | `process_tools_check` | 查单个进程状态 + 输出日志尾部 |
 | `process_tools_wait` | 等待一个/一批进程结束（超时只报「仍运行中」，绝不杀进程） |
 | `process_tools_communicate` | 与进程交互：写入 stdin、增量读 stdout、发中断/强杀 |
-| `process_tools_notice` | 注册完成/周期通知：完成后按会话聚合（3s 窗口），气泡提醒 + 自动唤醒 agent 处理 |
+| `process_tools_notice` | 注册完成/周期通知（单个/批量）：完成后按会话聚合（3s 窗口），气泡提醒 + 自动唤醒 agent 处理 |
 
 ## 相比内置命令
 
@@ -40,7 +40,7 @@ QwenPaw 内置的 `execute_shell_command` 是为「快速命令」设计的，�
 | 执行方式 | 仅前台，阻塞对话 | 前台 / 后台托管 / 脱离托管 |
 | 长任务 | 超时即杀，无法跟进 | 后台持续运行，随时查状态、读输出 |
 | 等待收口 | 无 | `wait` 单个/批量等待，超时不杀 |
-| 完成通知 | 无 | `notice` 气泡 + 自动唤醒 agent，长任务零轮询 |
+| 完成通知 | 无 | `notice` 气泡 + 自动唤醒 agent（单个/批量注册），长任务零轮询 |
 | 进程交互 | 无 | stdin 写入 / stdout 环形缓冲增量读 |
 | 多进程 | 无概念 | `#N` 编号管理（永不复用），批量等待与操作 |
 | 大输出 | 全量挤进上下文 | 净化日志落盘，按需读尾部（省 token） |
@@ -59,7 +59,8 @@ agent: process_tools_exec("python train.py", background=True)   → 进程 #1
 **多任务并行收口**——挂三个任务，全部结束后一次性汇报：
 
 ```
-agent: process_tools_wait("[1, 2, 3]")   ← 全部结束才返回（超时不杀）
+agent: process_tools_wait("[1, 2, 3]")    ← 全部结束才返回（超时不杀）
+   或: process_tools_notice("[1, 2, 3]")  ← 批量注册完成通知，零轮询
 ```
 
 **交互式进程**——启动 REPL / 数据库客户端，随时发指令、增量读输出：
