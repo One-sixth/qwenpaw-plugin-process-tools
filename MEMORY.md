@@ -6,9 +6,9 @@
 
 ## 当前状态速览（2026-09-12）
 
-- **版本**：v0.6.1（notice 批量注册）。0.6.0 已提交（`cd19195`）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量。
-- **测试**：**164 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
-- **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。0.6.1 待同步 py 进工作树 → 作者重启验证。
+- **版本**：v0.6.1（notice 批量注册，已提交 `deefb3a`，装机 0.6.1 运行中）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量。
+- **测试**：**170 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。**0.6.1 已装机实机冒烟通过**（2026-09-12）：混合批次三段式逐字命中 / 一行枚举+周期模式+JSON 字符串+幂等更新 / 全失败 error / 空列表参数错 / killed 聚合 ×2 通知 E2E（气泡+唤醒单回合，忙等时序正确）。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
 ---
@@ -16,7 +16,7 @@
 ## 装机与更新流程（重要）
 
 - **git 工作树方式安装**：装机目录就是工作树，**严禁 `qwenpaw plugin install`**（破坏工作树）。
-- 更新流程 = 同步代码文件进工作树 → **作者重启 QwenPaw**（小音不能重启宿主）。单纯覆盖文件**不触发重载**（sys.modules 缓存）——实测踩过：复制 utils.py 后复测仍旧行为。
+- 更新流程 = 同步代码文件进工作树 → **作者重启 QwenPaw**（助手不能重启宿主）。单纯覆盖文件**不触发重载**（sys.modules 缓存）——实测踩过：复制 utils.py 后复测仍旧行为。
 - plugin.json/文档允许暂时与代码不同步（只同步 py 即可先验证行为）。
 - `qwenpaw plugin install <URL>` 仅支持 zip 归档，Git 仓库需 clone 后本地路径安装（QwenPaw 安装器行为）。
 
@@ -194,7 +194,23 @@
   「30s×20」过时注释修正、notifier 重复注释行删除、补 flusher 异常
   路径测试（items 保留+task 复位+懒启动再投）；dict 永不回收记录为
   已知权衡（受会话数约束，符合内存态拍板）。156+4 测试。
+- **0.6.1 已实施+实机闭环：notice 批量注册**（2026-09-12 当日设计→落地→复审→冒烟）：
+  语义三轮迭代定稿：逐行报告→同类项分组→**三段式**（作者拍板）：固定三段
+  「已生效→不存在→已结束」按序拼接、空段跳过，单/批/混合共用 _build_text
+  （一个函数三个 if 零特例）；**逐个独立校验（部分成功语义）**：有效编号照常
+  注册，无效编号单独报告不连坐；**有生效即 success、全失败才 error**（作者
+  拍板；区别于 wait 的 all 语义，同插件两种批量语义并存合理）。批量全成功
+  一行枚举；「新注册 vs 幂等更新」合并为「已生效」；单进程旧文案退役统一。
+  实现：归档（oks/missing/ended）与注册均无 await 无并发缝隙；模式文本复用
+  MIN_INTERVAL_SECONDS。**教训×2**：①凭记忆重写旧文案差点丢「进程 」前缀——
+  行为等价性核对必须 `git show HEAD:file` 逐字比对；②测试断言把一行枚举误写
+  成每进程一行（实现没错断言错）——debug dump 实值核对再改。**零上下文终审
+  （第三轮）**：A-E 全 PASS（契约 7 条逐核对、schema 与 docstring 逐字一致、
+  170+4 复现）；F 组扫出存量规约违规（真实名称字样一行，历史提交遗留）已修——
+  **真实名称全仓 grep 应为发布终审固定项**。装机实机冒烟 5 项命中 + killed
+  聚合 ×2 E2E（投递等 agent 回合结束，忙等时序正确）。170+4 测试。
 - **macOS zsh 分支未实机验证**（Linux 已 Debian 37/37 核销，同 POSIX 路径风险低）。
+- 0.6.1 复审遗留测试缺口（轻微不阻塞，后续版本补）：编号 0/负数路径、interval=30 边界、已注册 900→改 0 的反向更新、exit=None 理论路径（实际不可达）。
 - 远期组：PTY 双后端、`qwenpaw:chat-reload` 上游需求、周期通知 token 实测、气泡 60s 过期补偿、run_at workspace 级键漂移、「按 OS PID 操作任意进程」搁置。
 - 多 agent 真机并发隔离未测（单测+子代理双向不可见已过）。
 - 通知投递最终形态（0.6.0 实机闭环）：全部会话统一「聚合器」——3s 窗口聚合一口气投递，忙等无上限（内存态，宿主关/崩即丢）。console=聚合气泡+单唤醒回合（agent 亲验）；非 console=信使回合回复送回 IM（wecom 作者实测）。0.5.1 gate 保留为 API 直调的兜底防并发层。
