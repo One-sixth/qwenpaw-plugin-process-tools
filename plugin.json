@@ -1,7 +1,7 @@
 {
   "id": "qwenpaw-plugin-process-tools",
   "name": "QwenPaw 增强多进程管理插件",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "type": "tool",
   "description": "增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、前台等待进程结束（wait）、stdin/stdout 交互、信号控制、完成/周期通知。进程按会话隔离，编号 #N 单调分配。exec 支持 env 环境变量、detach 脱离托管、encoding 编解码、no_shell 直启、shell 选择（auto/pwsh/bash）、hide_window 隐窗、name 标签。附前端伴生：后端活动×前端静止即自动刷新页面，唤醒回复全程直播。",
   "author": "onesixth",
@@ -13,5 +13,39 @@
   "qwenpaw_version": {
     "min": "2.0.0",
     "max": "2.3.0"
+  },
+  "meta": {
+    "tools": [
+      {
+        "name": "process_tools_exec",
+        "description": "启动托管 shell 进程（前台等待/后台运行），输出落净化日志。",
+        "icon": "🚀"
+      },
+      {
+        "name": "process_tools_list",
+        "description": "列出当前会话的全部托管进程（编号/状态/时长/命令）。",
+        "icon": "📋"
+      },
+      {
+        "name": "process_tools_check",
+        "description": "查看进程状态、退出码、运行时长与输出日志尾部。",
+        "icon": "🔍"
+      },
+      {
+        "name": "process_tools_wait",
+        "description": "前台主动等待一个或一批后台进程结束（all 语义，超时不杀进程）。",
+        "icon": "⏳"
+      },
+      {
+        "name": "process_tools_communicate",
+        "description": "与进程交互：写 stdin / 增量读 stdout / 中断 / 强杀进程树。",
+        "icon": "🔌"
+      },
+      {
+        "name": "process_tools_notice",
+        "description": "为进程注册完成/周期通知（opt-in，结束推送状态并唤醒处理）。",
+        "icon": "🔔"
+      }
+    ]
   }
 }

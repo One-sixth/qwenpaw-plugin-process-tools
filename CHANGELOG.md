@@ -3,6 +3,30 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
 
+## [0.6.2] - 2026-10-15
+
+plugin.json 补 `meta.tools` 声明，修复 6 个工具在非 default agent 的 UI 工具管理页不可见。
+
+### Fixed
+- **插件工具 UI 隐身**：QwenPaw 插件工具进入 agent 配置快照
+  （`agent.json` → `tools.builtin_tools`）的唯一通道是 manifest
+  `meta.tools` 声明；本插件此前未声明，导致非 default agent 的
+  UI 工具列表（`GET /tools` 只读配置快照）完全不显示 6 个工具。
+  运行时 ToolRegistry 注入不受影响，LLM 实际可调用——「UI 隐身
+  但运行时可用」的迷惑型缺陷。
+- **修复**：补 `meta.tools`（6 工具逐个声明 name/description/icon，
+  与 `register_tool` 参数一致；不声明 `enabled`——QwenPaw 2.2.1
+  忽略该字段并硬编码 enabled=False，新条目一律禁用态，需在 UI
+  手动开启）。
+
+### Notes
+- 新建 agent 自动获得 6 条禁用态条目；**存量 agent 受 QwenPaw
+  `load_agent_config` 指纹缓存影响（agent.json 文件不变则配置
+  对象永不重载），重启/卸载重装均无法补条目**，需直接编辑
+  agent.json（文件变化即触发缓存失效）。
+- 无代码改动，纯 manifest 元数据修复；6 个声明名与 `plugin.py`
+  注册名双向校验一致。
+
 ## [0.6.1] - 2026-09-12
 
 notice 批量注册 + 三段式结果消息（部分成功语义，作者拍板）。
