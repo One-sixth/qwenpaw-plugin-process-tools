@@ -1,4 +1,4 @@
-# Process Tools — QwenPaw 增强多进程工具
+# Process Tools — QwenPaw增强多进程工具
 
 让 QwenPaw Agent 具备完整的**后台进程管理能力**：启动、查看、等待、交互、通知——长任务不再阻塞对话。
 
