@@ -3,6 +3,50 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
 
+## [0.6.3] - 2026-10-15
+
+命令/name 控制字符转义显示 + 截断标记统一为大写三箭头。
+
+### Changed
+- **命令控制字符转义显示**：utils 新增 `escape_ctrl`（`\n \r \t \b \f`
+  命名转义，其余 C0/DEL/C1 控制字符 `\xNN`，非 ASCII 原样保留）。
+  命令回显的所有展示点包一层
+  `escape_ctrl(truncate_line(...))`（先截断后转义——控制字符是单
+  字符，截断点不会劈开转义序列，不出现悬空反斜杠）：exec 三分支
+  （detach/后台/前台）的"命令："行、check 结果、wait 结果块、
+  完成/周期通知文本、list 摘要（原 `replace("\n", " ")` 与 wait
+  原 `replace(chr(10), " ")` 均换同款转义，换行显示为 `\n`
+  而非空格）。存储原串 `mp.command` 不动，spawn 仍用原文。
+- **name 标签字段同款处理**：`name` 的全部 10 处展示点（exec
+  3 处含 detach 裸参数、check、wait 2 处、notice、notifier 2 处、
+  list 摘要）均包 `escape_ctrl`；存储原串 `mp.name` 不动，
+  summary_line 先截原串 40 再转义（与命令同款模式）。
+- **截断标记统一为 `<<<TRUNCATED>>>`**：`truncate_line` /
+  `make_result` / `summary_line` / exec 前台截断分支共 4 处
+  （对齐 QwenPaw 框架自身截断标记风格）。
+
+### Fixed
+- **零上下文子 agent 双盲复审抓出两处遗漏**：wait.py 展示点漏改
+  （仍用旧"换行→空格"，`\r` 等控制字符裸出）；`summary_line`
+  先转义后截断反序（窄边界截断点出悬空反斜杠）——均已修复并补
+  回归测试。
+
+### Tests
+- 180 passed + 4 skipped（基线 170+4）：`escape_ctrl` 单测 6 个
+  （命名转义 / \xNN 兜底 / 恒等 / 混合 / 新标记 ×2）；新增
+  `tests/test_display_escape.py` 展示层回归 4 个（exec 后台 +
+  check + wait + list 全单行转义；直接构造 mp 测通知文本；
+  summary_line 截断顺序钉死；name 控制字符回归）。
+
+### Notes
+- **两轮零上下文子 agent 双盲复审**：第一轮抓出上述 Fixed 两处
+  遗漏 + name 展示点只枚举到 7/10（作者全仓 grep 补齐 10 处）；
+  第二轮（修复后终审）两 agent 独立 9 项 / 10 项全 PASS、独立
+  实跑 180+4 一致，结论可发布。教训：用户可控字段（command、
+  name）的展示点枚举必须全仓 grep，不能凭印象列。
+- name 存储层既有 `.strip()[:80]` 会剥首尾空白/控制字符（人肉
+  标签设计），控制字符只可能出现在 name 中间，转义契约不受影响。
+
 ## [0.6.2] - 2026-10-15
 
 plugin.json 补 `meta.tools` 声明，修复 6 个工具在非 default agent 的 UI 工具管理页不可见。

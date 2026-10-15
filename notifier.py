@@ -45,9 +45,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from .manager import ManagedProcess
 
 try:
-    from .utils import truncate_line
+    from .utils import escape_ctrl, truncate_line
 except ImportError:  # 兼容 pytest 直接以项目根导入
-    from utils import truncate_line
+    from utils import escape_ctrl, truncate_line
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +144,11 @@ class Notifier:
             "failed": "❌ 失败",
             "killed": "🛑 已终止",
         }.get(mp.status, mp.status)
-        label = f"「{mp.name}」" if mp.name else ""
+        label = f"「{escape_ctrl(mp.name)}」" if mp.name else ""
         head = (
             f"[进程 #{mp.num}{label} {state_cn}]"
             f" exit={mp.exit_code} 用时 {mins}m{secs:02d}s\n"
-            f"命令：{truncate_line(mp.command, 120)}\n"
+            f"命令：{escape_ctrl(truncate_line(mp.command, 120))}\n"
             f"日志：{mp.log_path}"
         )
         lines, _size = mp.get_log_tail(TAIL_LINES_IN_NOTICE)
@@ -160,10 +160,10 @@ class Notifier:
         mins, secs = divmod(int(mp.elapsed()), 60)
         lines, _size = mp.get_log_tail(5)
         tail = "\n".join(lines) if lines else "（暂无输出）"
-        label = f"「{mp.name}」" if mp.name else ""
+        label = f"「{escape_ctrl(mp.name)}」" if mp.name else ""
         return (
             f"[进程 #{mp.num}{label} 运行中] 已运行 {mins}m{secs:02d}s\n"
-            f"命令：{truncate_line(mp.command, 120)}\n"
+            f"命令：{escape_ctrl(truncate_line(mp.command, 120))}\n"
             f"输出末尾：\n{tail}"
         )
 

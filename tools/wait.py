@@ -8,6 +8,7 @@ from typing import Optional
 try:
     from ..manager import STATUS_RUNNING, get_manager
     from ..utils import (
+        escape_ctrl,
         make_error,
         make_success,
         parse_int,
@@ -17,6 +18,7 @@ try:
 except ImportError:  # 兼容 pytest 直接以项目根导入
     from manager import STATUS_RUNNING, get_manager
     from utils import (
+        escape_ctrl,
         make_error,
         make_success,
         parse_int,
@@ -69,7 +71,7 @@ async def process_tools_wait(
         if waited is None:
             # 超时：报「仍运行中」，不杀、不给任何杀进程引导（W1/W3 拍板）
             still = "、".join(
-                f"#{m.num}「{m.name}」" if m.name else f"#{m.num}"
+                f"#{m.num}「{escape_ctrl(m.name)}」" if m.name else f"#{m.num}"
                 for m in mps if m.status == STATUS_RUNNING
             )
             finished = [m for m in mps if m.status != STATUS_RUNNING]
@@ -128,11 +130,11 @@ def _describe(mp, tail_lines: int) -> str:
     """单进程结果块（check 同风格，多进程时作为小节）。"""
     mins, secs = divmod(int(mp.elapsed()), 60)
     code = "" if mp.exit_code is None else f" exit={mp.exit_code}"
-    label = f"「{mp.name}」" if mp.name else ""
+    label = f"「{escape_ctrl(mp.name)}」" if mp.name else ""
     head = (
         f"#{mp.num}{label} [{mp.status}{code}] "
         f"{mins // 60:02d}:{mins % 60:02d}:{secs:02d}  "
-        f"$ {truncate_line(mp.command.replace(chr(10), ' '), 120)}"
+        f"$ {escape_ctrl(truncate_line(mp.command, 120))}"
     )
     if tail_lines <= 0:
         return head

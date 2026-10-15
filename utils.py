@@ -219,20 +219,46 @@ def agent_aliases(ws_dir: str) -> List[str]:
     return aliases
 
 
-# ── 截断 ──────────────────────────────────────────────────
+# ── 截断与展示 ──────────────────────────────────────────────
+
+_CTRL_NAMED_ESCAPES = {
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+}
+
+
+def escape_ctrl(text: str) -> str:
+    """控制字符反斜杠转义显示（不改原串）。
+
+    常用者命名转义（\\n \\r \\t \\b \\f），其余控制字符（C0/DEL/C1）
+    用 \\xNN；非 ASCII（中文等）原样保留。
+    """
+    out = []
+    for ch in text:
+        o = ord(ch)
+        if ch in _CTRL_NAMED_ESCAPES:
+            out.append(_CTRL_NAMED_ESCAPES[ch])
+        elif o < 0x20 or o == 0x7F or 0x80 <= o <= 0x9F:
+            out.append(f"\\x{o:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def truncate_line(line: str, max_len: int = LINE_CONTENT_TRUNCATE) -> str:
     """截断超长行内容。"""
     if len(line) > max_len:
-        return line[:max_len] + "<<truncated>>"
+        return line[:max_len] + "<<<TRUNCATED>>>"
     return line
 
 
 def make_result(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> str:
     """构建结果文本，超出 max_chars 时截断并提示。"""
     if len(text) > max_chars:
-        return text[:max_chars] + "\n<<truncated>> 内容已超出 max_chars 限制。"
+        return text[:max_chars] + "\n<<<TRUNCATED>>> 内容已超出 max_chars 限制。"
     return text
 
 

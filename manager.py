@@ -35,6 +35,7 @@ try:
     from .sanitizer import Sanitizer
     from .utils import (
         agent_aliases,
+        escape_ctrl,
         get_data_dir,
         read_log_tail,
         sanitize_session_token,
@@ -46,6 +47,7 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
     from sanitizer import Sanitizer
     from utils import (
         agent_aliases,
+        escape_ctrl,
         get_data_dir,
         read_log_tail,
         sanitize_session_token,
@@ -501,11 +503,12 @@ class ManagedProcess:
         mins, secs = divmod(int(self.elapsed()), 60)
         state = self.status
         code = "" if self.exit_code is None else f" exit={self.exit_code}"
-        label = f"「{self.name[:40]}」" if self.name else ""
-        cmd = self.command.replace("\n", " ")
+        label = f"「{escape_ctrl(self.name[:40])}」" if self.name else ""
+        cmd = self.command
         if len(cmd) > 80:
-            # 统一用 <<truncated>> 截断风格（实机冒烟观感反馈）
-            cmd = cmd[:80] + "<<truncated>>"
+            # 统一用 <<<TRUNCATED>>> 截断风格（实机冒烟观感反馈）
+            cmd = cmd[:80] + "<<<TRUNCATED>>>"
+        cmd = escape_ctrl(cmd)
         return (
             f"#{self.num}{label} [{state}{code}] {mins // 60:02d}:"
             f"{mins % 60:02d}:{secs:02d} $ {cmd}"
