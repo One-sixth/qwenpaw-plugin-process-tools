@@ -2,6 +2,32 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.4] - 2026-10-16
+
+工具类别分组 + 插件更名与描述焕新。
+
+### Added
+- **工具类别分组**：plugin.json 的 6 条 `meta.tools`（exec/list/check/
+  wait/communicate/notice）逐条声明 `"category": "runtime"`，与
+  file-tools v1.8.2 同款做法。category 由 `GET /tools` 端点实时从
+  PluginRegistry 缓存的 manifest 读取（不进 agent.json 快照），
+  **存量 agent 无需直改 agent.json，重启 QwenPaw 生效**。前端只认
+  6 个预定义组，进程管理归 `runtime`（运行与自动化）。
+
+### Changed
+- **插件更名**：「QwenPaw 增强多进程管理插件」→「QwenPaw 增强多进程
+  工具」（plugin.json / README / AGENTS 同步；CHANGELOG 0.1.0 历史
+  更名记录原文保留）。
+- **description 焕新**：能力列举改为动宾对齐（后台/前台启动、状态与
+  日志查看、等待结束、stdin/stdout 交互、中断与强杀进程树、通知自动
+  唤醒），去掉"（wait）"孤立英文括号，"交流能力"→"交互能力"，
+  "no_shell 直启"→"no_shell 原生直启"；前端伴生句去"全程直播"
+  行话（"后端活动 × 前端静止"→"agent 忙碌而页面静止"），改为
+  "后台任务唤醒后的处理回复实时可见，无需手动刷新"，README 同款
+  表述同步；信息面不变（六能力 + 会话隔离编号 + exec 增强参数 +
+  前端伴生）。
+
+
 
 ## [0.6.3] - 2026-10-15
 

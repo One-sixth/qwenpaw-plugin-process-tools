@@ -1,6 +1,6 @@
 # qwenpaw-plugin-process-tools
 
-QwenPaw 增强多进程管理插件。注册 6 个 Agent 工具，提供托管后台进程、
+QwenPaw 增强多进程工具。注册 6 个 Agent 工具，提供托管后台进程、
 会话隔离、stdin/stdout 交互、信号控制与通知系统。
 
 ## 快速导航
