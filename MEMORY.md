@@ -6,7 +6,7 @@
 
 ## 当前状态速览（2026-10-16）
 
-- **版本**：v0.6.4（meta.tools 逐条补 `category: "runtime"` UI 分组「运行与自动化」+ 插件更名「QwenPaw 增强多进程工具」+ description 焕新，2026-10-16；**文件已同步装机目录，待作者重启生效**）。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`（已装机，零上下文子 agent 实机验证 10 项全 PASS）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量（`deefb3a`）→ 0.6.2 meta.tools（`a0a5a4b`）→ 0.6.3 转义+标记（`1b930e8`）→ 0.6.4 category+更名（未 commit）。
+- **版本**：v0.6.4（meta.tools 逐条补 `category: "runtime"` UI 分组「运行与自动化」+ 插件更名「QwenPaw 增强多进程工具」+ description 焕新，2026-10-16；**文件已同步装机目录，待作者重启生效**）。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`（已装机，零上下文子 agent 实机验证 10 项全 PASS）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量（`deefb3a`）→ 0.6.2 meta.tools（`a0a5a4b`）→ 0.6.3 转义+标记（`1b930e8`）→ 0.6.4 category+更名（`8737f5f`）。
 - **测试**：**180 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
 - **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。**0.6.1 已装机实机冒烟通过**（2026-09-12）：混合批次三段式逐字命中 / 一行枚举+周期模式+JSON 字符串+幂等更新 / 全失败 error / 空列表参数错 / killed 聚合 ×2 通知 E2E（气泡+唤醒单回合，忙等时序正确）。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
