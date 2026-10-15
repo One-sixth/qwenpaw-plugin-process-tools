@@ -146,3 +146,52 @@ def test_parse_process_ids_channel_double_encoded():
     env_inner = _json.dumps({"A": "1"})      # '{"A": "1"}'
     env_double = _json.dumps(env_inner)      # '"{\"A\": \"1\"}"'
     assert parse_env(env_double) == ({"A": "1"}, None)
+
+
+# ── escape_ctrl：控制字符展示转义（0.6.3） ──
+
+
+def test_escape_ctrl_named():
+    from utils import escape_ctrl
+
+    assert escape_ctrl("\n\r\t\b\f") == "\\n\\r\\t\\b\\f"
+
+
+def test_escape_ctrl_hex_fallback():
+    """其余 C0/DEL/C1 控制字符用 \\xNN。"""
+    from utils import escape_ctrl
+
+    assert escape_ctrl("\x01\x02\x1f\x7f") == "\\x01\\x02\\x1f\\x7f"
+    assert escape_ctrl("\x80\x9f") == "\\x80\\x9f"
+
+
+def test_escape_ctrl_identity():
+    """非控制字符（中文、反斜杠、空格等）原样保留。"""
+    from utils import escape_ctrl
+
+    s = "D:\\Scripts\\备份.py --输出 报告.md 100% a-b_c"
+    assert escape_ctrl(s) == s
+
+
+def test_escape_ctrl_mixed():
+    from utils import escape_ctrl
+
+    assert escape_ctrl('python -c "import sys\nprint(1)"\t--x') == (
+        'python -c "import sys\\nprint(1)"\\t--x'
+    )
+
+
+def test_truncate_line_marker_upper():
+    """0.6.3：截断标记统一为 <<<TRUNCATED>>>。"""
+    from utils import truncate_line
+
+    assert truncate_line("x" * 200, 120) == "x" * 120 + "<<<TRUNCATED>>>"
+    assert truncate_line("short") == "short"
+
+
+def test_make_result_marker_upper():
+    from utils import make_result
+
+    assert make_result("y" * 100, max_chars=50) == (
+        "y" * 50 + "\n<<<TRUNCATED>>> 内容已超出 max_chars 限制。"
+    )

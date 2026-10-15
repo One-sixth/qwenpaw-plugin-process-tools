@@ -4,10 +4,10 @@
 
 ---
 
-## 当前状态速览（2026-09-12）
+## 当前状态速览（2026-10-15）
 
-- **版本**：v0.6.1（notice 批量注册，已提交 `deefb3a`，装机 0.6.1 运行中）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量。
-- **测试**：**170 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **版本**：v0.6.3（命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`，2026-10-15，**未 commit**；已装机 0.6.3，2026-10-16 作者重启后零上下文子 agent 实机验证 10 项全 PASS）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量（已提交 `deefb3a`）→ 0.6.2 meta.tools（未 commit）→ 0.6.3 转义+标记。
+- **测试**：**180 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
 - **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。**0.6.1 已装机实机冒烟通过**（2026-09-12）：混合批次三段式逐字命中 / 一行枚举+周期模式+JSON 字符串+幂等更新 / 全失败 error / 空列表参数错 / killed 聚合 ×2 通知 E2E（气泡+唤醒单回合，忙等时序正确）。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
@@ -18,6 +18,7 @@
 - **git 工作树方式安装**：装机目录就是工作树，**严禁 `qwenpaw plugin install`**（破坏工作树）。
 - 更新流程 = 同步代码文件进工作树 → **作者重启 QwenPaw**（助手不能重启宿主）。单纯覆盖文件**不触发重载**（sys.modules 缓存）——实测踩过：复制 utils.py 后复测仍旧行为。
 - plugin.json/文档允许暂时与代码不同步（只同步 py 即可先验证行为）。
+- **同步纪律（2026-10-15 教训）**：更新要同步**全部变更文件**（py + plugin.json + CHANGELOG/MEMORY 都要），只同步部分会留旧版残留——0.6.2 修复时 CHANGELOG/MEMORY 漏同步，隐私扫描在装机目录抓到残留称呼。
 - `qwenpaw plugin install <URL>` 仅支持 zip 归档，Git 仓库需 clone 后本地路径安装（QwenPaw 安装器行为）。
 
 ---
@@ -31,6 +32,7 @@
 - 治理：全工具 `tool_type="shell"`；仅 exec `target_param="command"`。
 - **工具时态三分（作者定稿）**：notice=未来事件（仅运行中可注册，已结束→error 引导 check）／check=当下与过去／wait=未完成。**勿回退**成 wait/check 并列引导。
 - **notice 结果三段式（作者定稿 0.6.1）**：固定三段「已生效→不存在→已结束」按序拼接、空段跳过，单/批/混合共用一条生成规则；**逐个独立校验，有生效即 success、全失败才 error**，勿回退成整批连坐或逐行逐条引导（引导语每类最多一次）。
+- **命令控制字符展示转义（0.6.3）**：`escape_ctrl`（`\n\r\t\b\f` 命名转义、C0/DEL/C1 用 `\xNN`、非 ASCII 原样）只包在展示层，存储 `mp.command`/`mp.name` 原串不动（spawn 用原文）；**先截断后转义**（控制字符单字符，截断点不劈开转义序列）；截断标记统一 `<<<TRUNCATED>>>`（对齐框架风格，历史条目不改写）。用户可控字段 = command + name 两个，展示点全仓 grep 枚举（命令 8 处 + name 10 处）；`log_path` 等插件自构路径无控制字符风险不处理。
 
 ---
 
@@ -70,6 +72,7 @@
 | 0.5.1 | 会话门闩修并发完成通知丢失 | 见「观察项与待办」 |
 | 0.6.0 | 会话聚合器（3s 窗口聚合投递，忙等无上限） | 见「观察项与待办」 |
 | 0.6.1 | notice 批量注册：逐个独立校验（部分成功语义，有生效即 success）、三段式结果消息（已生效/不存在/已结束，空段跳过零特例） | 消息表经三轮迭代定稿：逐行→分组同类项→三段式；引导语每类最多一次；「新注册 vs 更新」合并为「已生效」；单进程旧文案同步退役 |
+| 0.6.3 | 命令/name 控制字符转义显示（`escape_ctrl`）+ 截断标记统一 `<<<TRUNCATED>>>` | 只动展示层，存储 `mp.command`/`mp.name` 原串不动；**先截断后转义**（控制字符单字符，截断点不劈开转义序列，无悬空反斜杠）；list/wait 摘要原"换行→空格"均换同款转义；name 10 处展示点同款包转义；标记对齐框架风格。**双盲复审教训：用户可控字段（command、name）的展示点枚举必须全仓 grep**——首版漏 wait.py 展示点 + summary_line 转义截断反序（悬空反斜杠），name 点位子 agent 也只列了 7/10 |
 
 ### 刷新判据演化（0.3.2 终稿，防走回头路）
 

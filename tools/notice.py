@@ -13,6 +13,7 @@ try:
     )
     from ..utils import (
         current_channel,
+        escape_ctrl,
         make_error,
         make_success,
         parse_int,
@@ -28,6 +29,7 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
     )
     from utils import (
         current_channel,
+        escape_ctrl,
         make_error,
         make_success,
         parse_int,
@@ -143,7 +145,7 @@ def _mode_text(interval: int) -> str:
 
 
 def _ended_item(mp) -> str:
-    label = f"#{mp.num}「{mp.name}」" if mp.name else f"#{mp.num}"
+    label = f"#{mp.num}「{escape_ctrl(mp.name)}」" if mp.name else f"#{mp.num}"
     return f"{label} {mp.status} exit={mp.exit_code}"
 
 

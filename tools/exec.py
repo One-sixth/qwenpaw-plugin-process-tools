@@ -9,6 +9,7 @@ from typing import Optional, Union
 try:
     from ..manager import get_manager
     from ..utils import (
+        escape_ctrl,
         get_workspace_dir,
         make_error,
         make_success,
@@ -23,6 +24,7 @@ try:
 except ImportError:  # 兼容 pytest 直接以项目根导入
     from manager import get_manager
     from utils import (
+        escape_ctrl,
         get_workspace_dir,
         make_error,
         make_success,
@@ -139,11 +141,11 @@ async def process_tools_exec(
         except Exception as e:  # noqa: BLE001
             logger.exception("process_tools_exec detach 启动失败")
             return make_error("启动进程", f"启动出错：{e}")
-        label = f"「{str(name or '').strip()[:80]}」" if str(name or "").strip() else ""
+        label = f"「{escape_ctrl(str(name or '').strip()[:80])}」" if str(name or "").strip() else ""
         shell_part = f'shell="{shell_used}"，' if shell_used else ""
         return make_success(
             f"脱离进程 {label}已启动（pid={pid}，{shell_part}不受本插件托管）\n"
-            f"命令：{truncate_line(display_command, 120)}\n"
+            f"命令：{escape_ctrl(truncate_line(display_command, 120))}\n"
             "该进程无管道无日志、不占名额、宿主退出后继续运行；"
             "list/check/communicate/notice 对它全部无效。"
             f"管理请用系统命令按 PID 自理（如 taskkill /F /T /PID {pid}）。"
@@ -172,9 +174,9 @@ async def process_tools_exec(
     # ── 后台模式：立即返回编号 ──
     if background:
         return make_success(
-            f"进程 #{mp.num}{'「' + mp.name + '」' if mp.name else ''} "
+            f"进程 #{mp.num}{'「' + escape_ctrl(mp.name) + '」' if mp.name else ''} "
             f"已启动（pid={mp.pid}）\n"
-            f"命令：{truncate_line(mp.command, 120)}\n"
+            f"命令：{escape_ctrl(truncate_line(mp.command, 120))}\n"
             f"{shell_line}"
             f"{enc_note}\n"
             f"日志：{mp.log_path}\n"
@@ -211,17 +213,17 @@ async def process_tools_exec(
     elapsed = time.time() - start_ts
     mins, secs = divmod(int(elapsed), 60)
     output = mp.get_log_text()
-    label = f"「{mp.name}」" if mp.name else ""
+    label = f"「{escape_ctrl(mp.name)}」" if mp.name else ""
     header = (
         f"进程 #{mp.num}{label} 结束（exit={mp.exit_code}，用时 {mins}m{secs:02d}s）\n"
-        f"命令：{truncate_line(mp.command, 120)}\n"
+        f"命令：{escape_ctrl(truncate_line(mp.command, 120))}\n"
         f"{shell_line}"
         f"{enc_note}"
     )
     if len(output) > mo_chars:
         return make_success(
             f"{header}\n（输出超出 {mo_chars} 字符，以下截断，"
-            f"完整日志：{mp.log_path}）\n{output[:mo_chars]}\n<<truncated>>"
+            f"完整日志：{mp.log_path}）\n{output[:mo_chars]}\n<<<TRUNCATED>>>"
         )
     text = f"{header}\n{output}" if output else f"{header}\n（无输出）"
     return make_success(text)
