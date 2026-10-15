@@ -15,9 +15,9 @@
   6 个预定义组，进程管理归 `runtime`（运行与自动化）。
 
 ### Changed
-- **插件更名**：「QwenPaw 增强多进程管理插件」→「QwenPaw 增强多进程
-  工具」（plugin.json / README / AGENTS 同步；CHANGELOG 0.1.0 历史
-  更名记录原文保留）。
+- **插件更名**：「QwenPaw 增强多进程管理插件」→「QwenPaw增强多进程
+  工具」（去空格定稿；plugin.json / README / AGENTS 同步；CHANGELOG
+  0.1.0 历史更名记录原文保留）。
 - **description 焕新**：能力列举改为动宾对齐（后台/前台启动、状态与
   日志查看、等待结束、stdin/stdout 交互、中断与强杀进程树、通知自动
   唤醒），去掉"（wait）"孤立英文括号，"交流能力"→"交互能力"，
