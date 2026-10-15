@@ -1,4 +1,4 @@
-# Process Tools — QwenPaw 增强多进程管理插件
+# Process Tools — QwenPaw 增强多进程工具
 
 让 QwenPaw Agent 具备完整的**后台进程管理能力**：启动、查看、等待、交互、通知——长任务不再阻塞对话。
 
@@ -71,7 +71,7 @@ agent: process_tools_exec("python", no_shell=True, background=True)
        process_tools_communicate(2, action="read_stdout")
 ```
 
-**前端伴生（自动刷新）**：agent 被通知唤醒在后台干活时，已打开的 QwenPaw 页面会自动刷新一次并接上实时输出流——你不用手动刷新页面就能看到 agent 的回复直播。零配置，装插件即生效。
+**前端伴生（自动刷新）**：agent 被通知唤醒在后台干活时，已打开的 QwenPaw 页面会自动刷新并接上实时输出流——不用手动刷新页面，就能实时看到 agent 的处理回复。零配置，装插件即生效。
 
 ## 安装
 

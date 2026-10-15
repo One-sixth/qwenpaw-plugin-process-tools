@@ -1,9 +1,9 @@
 {
   "id": "qwenpaw-plugin-process-tools",
-  "name": "QwenPaw 增强多进程管理插件",
-  "version": "0.6.3",
+  "name": "QwenPaw 增强多进程工具",
+  "version": "0.6.4",
   "type": "tool",
-  "description": "增强 QwenPaw 的多进程管理和交流能力：后台进程启动、状态查看、前台等待进程结束（wait）、stdin/stdout 交互、信号控制、完成/周期通知。进程按会话隔离，编号 #N 单调分配。exec 支持 env 环境变量、detach 脱离托管、encoding 编解码、no_shell 直启、shell 选择（auto/pwsh/bash）、hide_window 隐窗、name 标签。附前端伴生：后端活动×前端静止即自动刷新页面，唤醒回复全程直播。",
+  "description": "为 QwenPaw 增强多进程托管与交互能力：后台/前台进程启动、状态与日志查看、等待进程结束、stdin/stdout 交互、中断与强杀进程树、完成/周期通知自动唤醒。进程按会话隔离，编号 #N 单调分配。exec 支持 env 环境变量、detach 脱离托管、encoding 编解码、no_shell 原生直启、shell 选择（auto/pwsh/bash）、hide_window 隐窗、name 标签。附前端伴生：agent 忙碌而页面静止时自动刷新，后台任务唤醒后的处理回复实时可见，无需手动刷新。",
   "author": "onesixth",
   "entry": {
     "backend": "plugin.py",
@@ -19,32 +19,38 @@
       {
         "name": "process_tools_exec",
         "description": "启动托管 shell 进程（前台等待/后台运行），输出落净化日志。",
-        "icon": "🚀"
+        "icon": "🚀",
+        "category": "runtime"
       },
       {
         "name": "process_tools_list",
         "description": "列出当前会话的全部托管进程（编号/状态/时长/命令）。",
-        "icon": "📋"
+        "icon": "📋",
+        "category": "runtime"
       },
       {
         "name": "process_tools_check",
         "description": "查看进程状态、退出码、运行时长与输出日志尾部。",
-        "icon": "🔍"
+        "icon": "🔍",
+        "category": "runtime"
       },
       {
         "name": "process_tools_wait",
         "description": "前台主动等待一个或一批后台进程结束（all 语义，超时不杀进程）。",
-        "icon": "⏳"
+        "icon": "⏳",
+        "category": "runtime"
       },
       {
         "name": "process_tools_communicate",
         "description": "与进程交互：写 stdin / 增量读 stdout / 中断 / 强杀进程树。",
-        "icon": "🔌"
+        "icon": "🔌",
+        "category": "runtime"
       },
       {
         "name": "process_tools_notice",
         "description": "为进程注册完成/周期通知（opt-in，结束推送状态并唤醒处理）。",
-        "icon": "🔔"
+        "icon": "🔔",
+        "category": "runtime"
       }
     ]
   }
