@@ -23,6 +23,18 @@ def test_exec_foreground_success():
     text = chunk_text(chunk)
     assert "fore-ok" in text
     assert "exit=0" in text
+    # v0.6.6：元信息与程序输出之间有分隔线
+    assert "————以下为stdout/stderr输出————" in text
+    assert text.index("encoding=") < text.index("————以下为stdout/stderr输出————")
+
+
+def test_exec_foreground_empty_output():
+    """v0.6.6：空输出走「（无输出）」占位，不加分隔线。"""
+    chunk = run(process_tools_exec(py_cmd("pass"), timeout=60))
+    assert not is_error(chunk)
+    text = chunk_text(chunk)
+    assert "（无输出）" in text
+    assert "以下为" not in text
 
 
 def test_exec_foreground_timeout_kills():
@@ -67,6 +79,8 @@ def test_exec_background_then_list_check():
         checked = chunk_text(await process_tools_check(1, tail_lines=5))
         assert "bg-line2" in checked
         assert "exit=0" in checked
+        # v0.6.7：输出段融合式分隔线（check 同款）
+        assert "————以下为输出末尾————" in checked
 
     run(main())
 
@@ -116,6 +130,8 @@ def test_communicate_write_read_sigkill():
             if "ECHO:hello" in seen:
                 break
         assert "ECHO:hello" in seen
+        # v0.6.7：read_stdout 融合式分隔线（偏移量语义在分隔线行内）
+        assert "————以下为净化输出" in seen
 
         k = await process_tools_communicate(1, "send_sigkill")
         assert not is_error(k)

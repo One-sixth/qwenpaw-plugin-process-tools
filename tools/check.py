@@ -67,7 +67,7 @@ async def process_tools_check(process_id, tail_lines: int = 20):
     more = ""
     if size > len(body.encode("utf-8", errors="replace")):
         more = f"\n（日志共 {size} 字节，可用 file_tools_read_lines 读全文）"
-    return make_success(f"{head}\n输出末尾：\n{body}{more}")
+    return make_success(f"{head}\n————以下为输出末尾————\n{body}{more}")
 
 
 def _parse_tail(value):

@@ -1,7 +1,7 @@
 {
   "id": "qwenpaw-plugin-process-tools",
   "name": "QwenPaw增强多进程工具",
-  "version": "0.6.5",
+  "version": "0.6.7",
   "type": "tool",
   "description": "为 QwenPaw 增强多进程托管与交互能力：后台/前台进程启动、状态与日志查看、等待进程结束、stdin/stdout 交互、中断与强杀进程树、完成/周期通知自动唤醒。进程按会话隔离，编号 #N 单调分配。exec 支持 env 环境变量、detach 脱离托管、encoding 编解码、no_shell 原生直启、shell 选择（auto/pwsh/bash）、hide_window 隐窗、name 标签。附前端伴生：agent 忙碌而页面静止时自动刷新，后台任务唤醒后的处理回复实时可见，无需手动刷新。",
   "author": "onesixth",

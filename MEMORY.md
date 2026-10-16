@@ -6,8 +6,8 @@
 
 ## 当前状态速览（2026-10-16）
 
-- **版本**：v0.6.5（notice 新增 `cancel` 参数：取消注册 + 撤回聚合缓存中待发送的通知；聚合器 swap-and-clear 化——PendingNotice 对象缓存 + 投递前渲染 + 三道闸无锁互斥；`read_log_tail` 修 TOCTOU，2026-10-16；**已双树提交 + 装机重启生效**：实机实测 + 无上下文复审 PASS）。0.6.4：meta.tools 逐条补 `category: "runtime"` UI 分组「运行与自动化」+ 插件更名「QwenPaw增强多进程工具」+ description 焕新（已生效）。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`（已装机，零上下文子 agent 实机验证 10 项全 PASS）。历史：0.4.4 → 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量 → 0.6.2 meta.tools → 0.6.3 转义+标记 → 0.6.4 category+更名。
-- **测试**：**189 passed + 4 skipped**（skip 全为平台守卫；含 0.6.5 新增 cancel 8 项 + read_log_tail TOCTOU 1 项）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **版本**：v0.6.7（输出分隔线家族统一：check/wait 标签、read_stdout 净化输出标签、notifier 完成通知/周期通知文本全部升级为融合式分隔线——元信息保留在分隔线行内，一行两用；空输出占位不加；notifier 两处经零上下文复审抓漏补齐，2026-10-16；已装机同步）。0.6.6：exec 前台返回新增输出分隔线 `————以下为stdout/stderr输出————`（元信息段与程序输出划界；前台正常+超长截断均加，空输出/后台/超时路径不加）。0.6.5：notice 新增 `cancel` 参数（取消注册 + 撤回聚合缓存待发通知；swap-and-clear 无锁聚合器 + 三道闸；`read_log_tail` 修 TOCTOU；实机实测 + 无上下文复审 PASS，已双树提交 + 重启生效）。0.6.4：meta.tools 逐条补 `category: "runtime"` UI 分组「运行与自动化」+ 插件更名「QwenPaw增强多进程工具」+ description 焕新（已生效）。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`（已装机，零上下文子 agent 实机验证 10 项全 PASS）。历史：0.4.4 → 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量 → 0.6.2 meta.tools → 0.6.3 转义+标记 → 0.6.4 category+更名 → 0.6.5 notice cancel → 0.6.6 exec 分隔线。
+- **测试**：**191 passed + 4 skipped**（skip 全为平台守卫；含 0.6.5 cancel 8 项 + read_log_tail TOCTOU 1 项 + 0.6.6/0.6.7 分隔线断言 7 处）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
 - **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。**0.6.1 已装机实机冒烟通过**（2026-09-12）：混合批次三段式逐字命中 / 一行枚举+周期模式+JSON 字符串+幂等更新 / 全失败 error / 空列表参数错 / killed 聚合 ×2 通知 E2E（气泡+唤醒单回合，忙等时序正确）。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
@@ -77,6 +77,8 @@
 | 0.6.3 | 命令/name 控制字符转义显示（`escape_ctrl`）+ 截断标记统一 `<<<TRUNCATED>>>` | 只动展示层，存储 `mp.command`/`mp.name` 原串不动；**先截断后转义**（控制字符单字符，截断点不劈开转义序列，无悬空反斜杠）；list/wait 摘要原"换行→空格"均换同款转义；name 10 处展示点同款包转义；标记对齐框架风格。**双盲复审教训：用户可控字段（command、name）的展示点枚举必须全仓 grep**——首版漏 wait.py 展示点 + summary_line 转义截断反序（悬空反斜杠），name 点位子 agent 也只列了 7/10 |
 | 0.6.4 | meta.tools 逐条补 `"category": "runtime"`（UI 分组「运行与自动化」）+ 更名「QwenPaw增强多进程工具」+ description 焕新 | category 走 `GET /tools` 端点实时读 PluginRegistry 缓存的 manifest，**不进 agent.json 快照**——存量 agent 无需直改 agent.json，重启即生效（与 meta.tools 补快照条目机制分属两层，见知识库《QwenPaw插件工具可见性机制》）；与 file-tools v1.8.2 同款做法；更名同步 plugin.json/README/AGENTS，CHANGELOG 0.1.0 历史条目原文保留；复验脚本 workspace `tools/review_process_tools_v064.py` |
 | 0.6.5 | notice 新增 `cancel` 参数（取消注册 + 撤回聚合缓存待发通知）+ 聚合器 swap-and-clear 化 + `read_log_tail` 修 TOCTOU | 设计与作者五轮推演定稿：PendingNotice 对象缓存 + **投递前一刻渲染**（完成通知冻结一致、周期通知时间戳更新鲜）+ 无锁三道闸（cancelled 短路 / cancel 清扫 / 渲染前过滤），cancel 全程无 await 点与 flusher 天然互斥；拿走即消费（ok/fail/异常均无删除操作），**异常批次从"保留"改"丢弃"**（杜绝毒丸批次，测试语义同步变更）；busy 放回仅 survivors（渲染失败不回炉）；互斥量方案因"flusher 消费含 HTTP 最长 330s、同步段本就原子"被无锁方案替代 |
+| 0.6.6 | exec 前台返回新增输出分隔线 `————以下为stdout/stderr输出————`（元信息段与程序输出划界） | 范围四分：前台正常 + 超长截断均加（截断提示留分隔线上方）；**空输出不加**（`（无输出）`占位——"以下为输出"后面空荡荡反而误导）；后台启动不加（无输出段）；前台超时不加（已有「输出末尾 20 行：」引导）。改返回格式前先 grep 测试断言 |
+| 0.6.7 | 分隔线家族统一：check/wait「输出末尾：」→ `————以下为输出末尾————`；read_stdout → `————以下为净化输出 [start,next) 共 N 字节————`；notifier 完成通知/周期通知文本同款补齐（零上下文复审抓漏） | **融合式**：标签语义合并进分隔线行，一行两用不增行数；偏移量/字节数/滑出提示是续读必需信息，不能因美化丢失；空输出占位与 exec 对齐（周期通知原"占位也套标签"一并修正）。**教训：改返回格式先全仓 grep 拼装点，别只盯 tools/ 主链——notifier 通知文本是独立演化的隐藏成员**；零上下文复审的价值=枚举完备性 |
 
 
 ### 刷新判据演化（0.3.2 终稿，防走回头路）

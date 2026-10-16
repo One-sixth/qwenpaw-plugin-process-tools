@@ -212,19 +212,20 @@ class Notifier:
         )
         lines, _size = mp.get_log_tail(TAIL_LINES_IN_NOTICE)
         if lines:
-            return head + "\n输出末尾：\n" + "\n".join(lines)
+            return head + "\n————以下为输出末尾————\n" + "\n".join(lines)
         return head + "\n（无输出）"
 
     def build_periodic_text(self, mp: "ManagedProcess") -> str:
         mins, secs = divmod(int(mp.elapsed()), 60)
         lines, _size = mp.get_log_tail(5)
-        tail = "\n".join(lines) if lines else "（暂无输出）"
         label = f"「{escape_ctrl(mp.name)}」" if mp.name else ""
-        return (
+        head = (
             f"[进程 #{mp.num}{label} 运行中] 已运行 {mins}m{secs:02d}s\n"
-            f"命令：{escape_ctrl(truncate_line(mp.command, 120))}\n"
-            f"输出末尾：\n{tail}"
+            f"命令：{escape_ctrl(truncate_line(mp.command, 120))}"
         )
+        if not lines:
+            return head + "\n（暂无输出）"
+        return head + "\n————以下为输出末尾————\n" + "\n".join(lines)
 
     # ── 聚合投递（0.6.0：全部会话类型统一逻辑）──
 

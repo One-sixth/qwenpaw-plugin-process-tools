@@ -82,6 +82,29 @@ def test_notifier_texts_command_ctrl_escaped(tmp_dir):
         assert [l for l in text.split("\n") if l.startswith("命令：")] == [expected]
 
 
+def test_notifier_texts_separator_line(tmp_dir):
+    """v0.6.7：通知文本输出段同款分隔线家族；占位不加分隔线。"""
+    nt = Notifier()
+    # 有输出：完成/周期通知文本均含分隔线
+    log = os.path.join(tmp_dir, "p.log")
+    with open(log, "w", encoding="utf-8") as f:
+        f.write("notice-line\n")
+    mp = ManagedProcess(1, "python -c pass", ("a", "u", "s"), tmp_dir, log)
+    comp = nt.build_completion_text(mp)
+    peri = nt.build_periodic_text(mp)
+    assert "————以下为输出末尾————" in comp
+    assert "————以下为输出末尾————" in peri
+    assert "notice-line" in comp and "notice-line" in peri
+    # 空日志：占位，无分隔线
+    empty_log = os.path.join(tmp_dir, "empty.log")
+    open(empty_log, "w", encoding="utf-8").close()
+    mp2 = ManagedProcess(2, "python -c pass", ("a", "u", "s"), tmp_dir, empty_log)
+    comp2 = nt.build_completion_text(mp2)
+    peri2 = nt.build_periodic_text(mp2)
+    assert "（无输出）" in comp2 and "以下为" not in comp2
+    assert "（暂无输出）" in peri2 and "以下为" not in peri2
+
+
 def test_name_ctrl_escaped(tmp_dir):
     """name 含控制字符同样转义（header 行恒单行）。"""
     argv = [sys.executable, "-c", "print(1)"]
