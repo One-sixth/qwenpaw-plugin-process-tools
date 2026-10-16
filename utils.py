@@ -88,13 +88,14 @@ def sanitize_session_token(text: str) -> str:
     return f"{safe}_{digest}" if safe else digest
 
 
-# ── workspace 目录 ────────────────────────────────────────
+# ── 目录解析（workspace / 工具基准 / cwd）─────────────────
 
 
 def get_workspace_dir() -> Optional[str]:
     """获取 QwenPaw 默认工作区目录。
 
     优先 kernel contextvar，其次 tool_config，兜底 agent profiles 配置。
+    插件内部状态（数据目录/清理扫描）专用；工具 cwd 语义用 get_tool_base_dir。
     """
     try:
         from qwenpaw.config.context import current_workspace_dir
@@ -131,12 +132,55 @@ def get_workspace_dir() -> Optional[str]:
     return None
 
 
+def get_tool_base_dir() -> str:
+    """获取用户工具基准目录（对齐内核 qwenpaw.config.context.get_tool_base_dir）。
+
+    内核优先级：effective project dir → workspace dir → 全局 WORKING_DIR，
+    会话配置了 project dir 时 cwd 默认值跟随之。内核导入失败（无 qwenpaw
+    环境）回落 get_workspace_dir()。仅供工具 cwd 语义使用；插件内部状态
+    （get_data_dir/清理扫描）必须走 get_workspace_dir，避免数据落进用户
+    项目目录。
+    """
+    try:
+        from qwenpaw.config.context import get_tool_base_dir as _kernel_base_dir
+
+        return str(_kernel_base_dir())
+    except Exception:  # noqa: BLE001
+        return get_workspace_dir() or ""
+
+
+def get_project_dir_paths() -> List[str]:
+    """当前会话生效的项目目录列表（第一个为主目录）。
+
+    对齐内核 get_all_project_dir_paths；未配置/无上下文返回空列表，
+    调用方据此回落 get_tool_base_dir()。
+    """
+    try:
+        from qwenpaw.config.context import get_all_project_dir_paths
+
+        return [str(p) for p in get_all_project_dir_paths()]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def resolve_cwd(path: str) -> str:
-    """解析工作目录参数。空串表示不指定（由调用方决定默认值）。"""
+    """解析 cwd 参数，语义对齐内核 execute_shell_command。
+
+    空串返回 ""（调用方回落基准目录）；相对路径挂第一个项目目录
+    （无项目目录配置时挂 get_tool_base_dir()）；绝对路径 expanduser 后
+    照用。resolve() 真实走文件系统（断连网络盘可阻塞数十秒），事件循环
+    上调用请丢 asyncio.to_thread。
+    """
     if not path:
         return ""
-    expanded = os.path.expanduser(path)
-    return os.path.normpath(os.path.abspath(expanded))
+    candidate = Path(os.path.expanduser(str(path)))
+    if not candidate.is_absolute():
+        roots = get_project_dir_paths()
+        base = roots[0] if roots else get_tool_base_dir()
+        if not base:
+            return ""
+        candidate = Path(base) / candidate
+    return str(candidate.resolve())
 
 
 def get_data_dir() -> str:

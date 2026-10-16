@@ -2,6 +2,37 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.8] - 2026-10-17
+
+`process_tools_exec` 的 cwd 语义对齐内核 `get_tool_base_dir`。
+
+### Changed
+- **cwd 默认值（空串）**：`get_workspace_dir()` → `get_tool_base_dir()`
+  （utils 新增同名包装，透传内核 `qwenpaw.config.context.get_tool_base_dir`：
+  effective project dir → workspace dir → 全局 WORKING_DIR；内核导入失败
+  回落 `get_workspace_dir()`）。会话配置了 project dir 时默认目录跟随之。
+- **相对路径修 bug**：旧实现 `os.path.abspath` 实际相对**宿主进程启动
+  目录**（与文档"相对于 workspace"不符）；新实现对齐内核
+  `execute_shell_command`——挂第一个项目目录（`get_all_project_dir_paths`
+  的 roots[0]），无项目目录配置挂 base dir，绝不用宿主 cwd 拼相对路径。
+- **绝对路径**：expanduser 后 `Path.resolve()`（对齐内核，替代
+  normpath+abspath）。
+- **resolve 防卡事件循环**：`Path.resolve()` 真实走文件系统（断连网络
+  盘/映射盘符可阻塞数十秒），exec 里丢 `asyncio.to_thread`（内核
+  `run_sync_io` 同款处理）。
+- **内部状态不动**：`get_data_dir`（counters/logs）与 `workspaces_root`
+  （stale 清理）继续用 `get_workspace_dir()`——插件数据不落用户项目
+  目录、不随 project dir 漂移（内核规约：internal subsystems 禁用
+  get_tool_base_dir）。
+- 文档同步：tools_schema.json / exec docstring 的 cwd 描述更新；
+  plugin.json qwenpaw_version 范围 min 2.2.0 / max 2.9.0。
+
+### Tests
+- 新增 11 项：resolve_cwd 钉死 8 项（空串/挂项目目录/回落 base/无
+  base 返回空/绝对路径/expanduser/内核不可用回落/内核透传）+ exec
+  E2E 3 项（相对 cwd 子进程真实工作目录命中、空串回落 base、坏相对
+  cwd 报错）。全量 202 passed + 4 skipped。
+
 ## [0.6.7] - 2026-10-16
 
 输出分隔线家族统一（check / wait / communicate read_stdout）。

@@ -497,3 +497,59 @@ def test_shell_wrap_keeps_display_clean():
     assert "NoProfile" not in text
     assert 'shell="' in text
     assert sys.executable in text
+
+
+# ── cwd 对齐内核（0.6.8）────────────────────────────────
+
+
+def test_exec_relative_cwd_mounts_project_dir(monkeypatch, tmp_dir):
+    """E2E：相对 cwd 挂第一个项目目录，子进程真实工作目录命中。
+
+    mock utils.get_project_dir_paths（resolve_cwd 在 utils 模块内查全局，
+    monkeypatch 模块属性有效；exec 经 from-import 拿到的 resolve_cwd 是
+    同一函数对象）。"""
+    import utils as utils_mod
+
+    proj_sub = os.path.join(tmp_dir, "proj", "sub")
+    os.makedirs(proj_sub)
+    monkeypatch.setattr(
+        utils_mod,
+        "get_project_dir_paths",
+        lambda: [os.path.dirname(proj_sub)],
+    )
+    chunk = run(
+        process_tools_exec(py_cmd("import os;print(os.getcwd())"), cwd="sub")
+    )
+    assert not is_error(chunk)
+    text = _text(chunk)
+    assert os.path.normcase(proj_sub) in os.path.normcase(text)
+
+
+def test_exec_empty_cwd_uses_base_dir(monkeypatch, tmp_dir):
+    """E2E：cwd 空串回落 get_tool_base_dir()（exec 模块命名空间绑定，
+    需对 tools.exec 逐模块 setattr——值绑定陷阱）。"""
+    import tools.exec as exec_mod
+
+    base = os.path.join(tmp_dir, "wsroot")
+    os.makedirs(base)
+    monkeypatch.setattr(exec_mod, "get_tool_base_dir", lambda: base)
+    chunk = run(process_tools_exec(py_cmd("import os;print(os.getcwd())")))
+    assert not is_error(chunk)
+    assert os.path.normcase(base) in os.path.normcase(_text(chunk))
+
+
+def test_exec_bad_relative_cwd_under_base_reports_error(monkeypatch, tmp_dir):
+    """相对 cwd 拼出不存在的目录 → 启动失败返回错误（不崩溃、不静默）。"""
+    import utils as utils_mod
+
+    proj = os.path.join(tmp_dir, "proj")
+    os.makedirs(proj)
+    monkeypatch.setattr(utils_mod, "get_project_dir_paths", lambda: [proj])
+    chunk = run(
+        process_tools_exec(py_cmd("print(1)"), cwd="no_such_sub_dir_xyz")
+    )
+    assert is_error(chunk)
+    text = _text(chunk)
+    # manager.start 内部捕 OSError 转 RuntimeError（带编号消耗提示）；
+    # Windows 文案「目录名称无效」，POSIX 是 Not a directory
+    assert "已消耗" in text or "目录名称无效" in text or "Not a directory" in text

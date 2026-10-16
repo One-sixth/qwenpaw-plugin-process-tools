@@ -30,7 +30,7 @@
           },
           "cwd": {
             "default": "",
-            "description": "工作目录，相对路径相对于 workspace。空串表示使用 workspace 目录。",
+            "description": "工作目录，相对路径相对于第一个项目目录（未配置项目目录时相对于 workspace）。空串表示使用项目目录（未配置时 workspace）。",
             "type": "string"
           },
           "max_output_chars": {
