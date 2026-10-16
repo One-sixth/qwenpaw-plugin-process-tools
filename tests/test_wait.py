@@ -21,6 +21,8 @@ def test_wait_single_completion():
     text = chunk_text(chunk)
     assert "completed" in text and "exit=0" in text
     assert "w-done" in text
+    # v0.6.7：输出段融合式分隔线（wait 同款）
+    assert "————以下为输出末尾————" in text
 
 
 def test_wait_already_terminated_is_immediate():
@@ -77,6 +79,8 @@ def test_wait_multiple_all_semantics():
     text = chunk_text(chunk)
     assert "#1" in text and "#2" in text
     assert "全部结束" in text
+    # v0.6.7：多进程逐段各带一条分隔线
+    assert text.count("————以下为输出末尾————") == 2
 
 
 def test_wait_list_json_string_channel_defense():

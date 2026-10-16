@@ -141,7 +141,7 @@ def _describe(mp, tail_lines: int) -> str:
     lines, _size = mp.get_log_tail(tail_lines)
     if not lines:
         return head + "\n（暂无输出）"
-    return head + "\n输出末尾：\n" + "\n".join(lines)
+    return head + "\n————以下为输出末尾————\n" + "\n".join(lines)
 
 
 def _parse_tail(value):

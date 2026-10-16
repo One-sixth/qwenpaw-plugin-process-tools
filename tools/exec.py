@@ -223,7 +223,13 @@ async def process_tools_exec(
     if len(output) > mo_chars:
         return make_success(
             f"{header}\n（输出超出 {mo_chars} 字符，以下截断，"
-            f"完整日志：{mp.log_path}）\n{output[:mo_chars]}\n<<<TRUNCATED>>>"
+            f"完整日志：{mp.log_path}）\n"
+            "————以下为stdout/stderr输出————\n"
+            f"{output[:mo_chars]}\n<<<TRUNCATED>>>"
         )
-    text = f"{header}\n{output}" if output else f"{header}\n（无输出）"
+    text = (
+        f"{header}\n————以下为stdout/stderr输出————\n{output}"
+        if output
+        else f"{header}\n（无输出）"
+    )
     return make_success(text)

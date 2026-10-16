@@ -125,7 +125,8 @@ async def _do_read_stdout(mp, read_offset: Optional[int], max_bytes: Optional[in
         dropped_note = f"（请求偏移已滑出环形缓冲，从 {start} 起读）"
     hit_cap = len(data) >= size
     return make_success(
-        f"[{start},{next_offset}) 共 {len(data)} 字节净化输出{dropped_note}：\n"
+        f"————以下为净化输出 [{start},{next_offset}) "
+        f"共 {len(data)} 字节{dropped_note}————\n"
         f"{text}"
         + (
             f"\n（未读完，续读传 read_offset={next_offset}）"
