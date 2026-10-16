@@ -100,7 +100,10 @@ class ProcessToolsPlugin:
         api.register_tool(
             tool_name="process_tools_notice",
             tool_func=process_tools_notice,
-            description="为进程注册完成/周期通知（opt-in，结束推送状态并唤醒处理）。",
+            description=(
+                "注册进程完成/周期通知（仅会话空闲/你停手时才投递）；"
+                "cancel=True 取消注册并撤回待发通知。"
+            ),
             icon="🔔",
             tool_type="shell",
             target_param="",

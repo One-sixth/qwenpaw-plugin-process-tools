@@ -202,7 +202,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_notice",
-      "description": "若要动态接收后台进程状态的周期通知或结束通知，必须调用本工具注册进程状态通知：进程结束时推送一次完成通知；interval_seconds≥30 时每隔该秒数推送进度快照，长任务推荐 ≥900。可为单个或一批进程注册，编号逐个独立校验，无效编号不影响其他编号注册。注册后无需再用 wait 等待进程结束——系统会自动把通知发到用户侧并唤醒 agent。只能给运行中的进程注册；不存在/已结束的编号在结果中单独报告，已结束进程用 process_tools_check 获取结果。",
+      "description": "注册后台进程的完成/周期通知（进程结束推送状态并唤醒处理）；cancel=True 取消注册并撤回尚未投出的通知。\n⚠️ 通知只在会话空闲（你停止调用工具、回合结束）时投出：连续调工具期间挂起不出现、停手后补发。\n仅运行中进程可注册，已结束→报错并引导 process_tools_check。",
       "parameters": {
         "properties": {
           "process_id": {
@@ -210,8 +210,13 @@
           },
           "interval_seconds": {
             "default": 0,
-            "description": "周期通知间隔秒数。0（默认）=仅完成通知；1~29 非法；≥30 生效（对整批共享）。",
+            "description": "周期通知间隔秒数。0（默认）=仅完成通知；1~29 非法；≥30 生效（整批共享，长任务推荐 ≥900）。cancel=True 时忽略。",
             "type": "integer"
+          },
+          "cancel": {
+            "default": false,
+            "description": "True=取消模式（默认 False=注册/更新通知）。",
+            "type": "boolean"
           }
         },
         "required": [

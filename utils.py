@@ -621,22 +621,26 @@ def read_log_tail(path: str, tail_lines: int = 20, max_bytes: int = 65536) -> Tu
         max_bytes: 反向读取的字节上限
 
     Returns:
-        (lines, file_size)；文件不存在时 lines 为空列表
+        (lines, file_size)；文件不存在或读取失败（如 isfile 过后被并发
+        删除/锁定，TOCTOU）时 lines 为空列表
     """
     if not os.path.isfile(path):
         return [], 0
-    size = os.path.getsize(path)
-    read_len = min(size, max_bytes)
-    drop_first = False
-    with open(path, "rb") as f:
-        if read_len < size:
-            # 多探一字节：窗口起点的前一个字符若是 \n，首行是完整的，不能丢
-            f.seek(size - read_len - 1)
-            probe = f.read(1)
-            drop_first = probe != b"\n"
-            raw = f.read(read_len)
-        else:
-            raw = f.read()
+    try:
+        size = os.path.getsize(path)
+        read_len = min(size, max_bytes)
+        drop_first = False
+        with open(path, "rb") as f:
+            if read_len < size:
+                # 多探一字节：窗口起点的前一个字符若是 \n，首行是完整的，不能丢
+                f.seek(size - read_len - 1)
+                probe = f.read(1)
+                drop_first = probe != b"\n"
+                raw = f.read(read_len)
+            else:
+                raw = f.read()
+    except OSError:  # TOCTOU：isfile 过后被删/锁——与"不存在"同语义
+        return [], 0
     text = raw.decode("utf-8", errors="replace")
     if drop_first and "\n" in text:
         text = text.split("\n", 1)[1]

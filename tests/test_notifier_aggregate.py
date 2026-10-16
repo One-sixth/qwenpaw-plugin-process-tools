@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 import notifier as notifier_mod
-from notifier import Notifier
+from notifier import Notifier, PendingNotice
 
 WINDOW = 0.01  # 聚合窗口压缩到毫秒级
 
@@ -61,13 +61,13 @@ def test_busy_waits_forever_and_accumulates(monkeypatch):
     acc_key = ("a", "u", "sess-busy", "wecom")
 
     async def main():
-        await nt.deliver(key, "第一条", wake_channel="wecom")
+        await nt.deliver(key, PendingNotice(text="第一条"), wake_channel="wecom")
         # 等 flusher 进入忙等（前两次尝试）
         for _ in range(50):
             if len(attempts) >= 1:
                 break
             await asyncio.sleep(0.01)
-        await nt.deliver(key, "第二条", wake_channel="wecom")  # 忙等期间入队
+        await nt.deliver(key, PendingNotice(text="第二条"), wake_channel="wecom")  # 忙等期间入队
         await wait_done(nt, acc_key)
 
     run(main())
@@ -98,10 +98,10 @@ def test_fail_consumes_batch_without_retry(monkeypatch):
     acc_key = ("a", "u", "sess-fail", "wecom")
 
     async def main():
-        await nt.deliver(key, "孤批通知", wake_channel="wecom")
+        await nt.deliver(key, PendingNotice(text="孤批通知"), wake_channel="wecom")
         await wait_done(nt, acc_key)
         # flusher 已退出（items 空），再入队会懒启动新 flusher
-        await nt.deliver(key, "第二批", wake_channel="wecom")
+        await nt.deliver(key, PendingNotice(text="第二批"), wake_channel="wecom")
         await wait_done(nt, acc_key)
 
     run(main())
@@ -136,12 +136,12 @@ def test_console_bubble_only_on_final_delivery(monkeypatch):
     acc_key = ("a", "u", "sess-bubble", "console")
 
     async def main():
-        await nt.deliver(key, "通知A", wake_channel="console")
+        await nt.deliver(key, PendingNotice(text="通知A"), wake_channel="console")
         for _ in range(50):
             if len(attempts) >= 1:
                 break
             await asyncio.sleep(0.01)
-        await nt.deliver(key, "通知B", wake_channel="console")
+        await nt.deliver(key, PendingNotice(text="通知B"), wake_channel="console")
         await wait_done(nt, acc_key)
 
     run(main())
@@ -158,9 +158,10 @@ def test_join_notice_text_shapes():
     assert joined.count("─" * 24) == 2  # 3 条之间 2 道分隔线
 
 
-def test_flusher_exception_keeps_items_and_resets_task(monkeypatch):
-    """flusher 异常路径：items 保留不丢、flusher_task 复位、
-    新通知入队时懒启动的新 flusher 能把保留批次一并投出。"""
+def test_flusher_exception_drops_taken_batch_and_resets_task(monkeypatch):
+    """flusher 异常路径（0.6.5 swap-and-clear 语义变更）：批次已拿走
+    即已消费，异常时批次丢弃（与 fail 不重试同哲学，杜绝毒丸批次
+    反复炸 flusher）、flusher_task 复位、新通知懒启动正常投出。"""
     monkeypatch.setattr(notifier_mod, "FLUSH_WINDOW_SECONDS", WINDOW)
 
     attempts = []
@@ -178,24 +179,23 @@ def test_flusher_exception_keeps_items_and_resets_task(monkeypatch):
     acc_key = ("a", "u", "sess-crash", "wecom")
 
     async def main():
-        await nt.deliver(key, "幸存通知", wake_channel="wecom")
-        # 等 flusher 异常退出（items 保留）
+        await nt.deliver(key, PendingNotice(text="幸存通知"), wake_channel="wecom")
+        # 等 flusher 异常退出（拿走的批次随异常丢弃）
         acc = nt._accumulators[acc_key]
         for _ in range(200):
             if acc.flusher_task is None or acc.flusher_task.done():
                 break
             await asyncio.sleep(0.01)
         assert acc.flusher_task is None or acc.flusher_task.done()
-        assert acc.items and "幸存通知" in acc.items[0], (
-            "异常批次必须保留在累积器里"
-        )
-        # 新通知入队 → 懒启动新 flusher → 保留批次 + 新通知一起投出
-        await nt.deliver(key, "后续通知", wake_channel="wecom")
+        assert not acc.items, "拿走即消费：异常批次不回流累积器"
+        # 新通知入队 → 懒启动新 flusher → 正常投出
+        await nt.deliver(key, PendingNotice(text="后续通知"), wake_channel="wecom")
         await wait_done(nt, acc_key)
 
     run(main())
     assert len(attempts) == 2
-    assert "幸存通知" in attempts[1] and "后续通知" in attempts[1]
+    assert attempts[0] == "幸存通知"
+    assert attempts[1] == "后续通知", "异常批次已丢弃，只投新通知"
 
 
 def test_single_notice_passes_through_verbatim(monkeypatch):
@@ -215,7 +215,7 @@ def test_single_notice_passes_through_verbatim(monkeypatch):
     acc_key = ("a", "u", "sess-single", "console")
 
     async def main():
-        await nt.deliver(key, "[进程 #1 ✅ 已完成] exit=0", wake_channel="console")
+        await nt.deliver(key, PendingNotice(text="[进程 #1 ✅ 已完成] exit=0"), wake_channel="console")
         await wait_done(nt, acc_key)
 
     run(main())

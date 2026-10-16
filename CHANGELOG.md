@@ -2,6 +2,48 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.5] - 2026-10-16
+
+`process_tools_notice` 新增 `cancel` 参数：取消注册并撤回待发通知。
+
+### Added
+- **cancel 参数**：`process_tools_notice(process_id, cancel=True)` 解除
+  已注册通知（停周期任务、exit 不再推送完成通知），并**撤回聚合缓存
+  中等待发送的该进程通知**——进程刚结束、完成通知尚在 3s 聚合窗口
+  内时同样可撤回（本需求核心场景）。取消模式按有无注册记录三态归
+  档报告：已取消 / 无注册 / 不存在（撤回条数不进报告——作者定稿：
+  知道取消成功即可），部分成功语义同注册模式；`cancel=True` 时
+  `interval_seconds` 静默忽略。
+- **`Notifier.cancel(key, num)`**：同步原子段（弹注册 + 停周期 + 置
+  `cancelled` 标志 + 清扫聚合队列中本 notice 的待发条目），返回撤回
+  条数（-1 = 无注册）。
+
+### Changed
+- **聚合器 swap-and-clear 化**（无锁设计，与作者共同推演定稿）：累积
+  器条目从预渲染文本改为 `PendingNotice` 对象（注册引用 + 延迟渲染
+  上下文），**投递前一刻才渲染文本**（完成通知内容冻结一致，周期通
+  知时间戳取投递时刻更新鲜）。flusher 窗口到点**原子拿走全部累积并
+  清空队列**（拿走即消费，ok/fail 无删除操作）→ 渲染时过滤已取消条
+  目 → busy 则渲染存活条目放回队首（保持顺序）。交错安全由"三道
+  闸"保证（cancelled 短路 / cancel 清扫 / 渲染前过滤），cancel 全程
+  无 await 点与 flusher 天然互斥，无锁、零阻塞。
+- **异常语义变更**：flusher 投递异常时批次随拿走丢弃（旧版保留在累
+  积器）——与"fail 不重试"同哲学，杜绝毒丸批次反复炸 flusher。
+- **`read_log_tail` 修 TOCTOU**：`isfile` 过后 `getsize`/`open` 之间
+  文件被并发删除/锁定时与"不存在"同语义返回空列表（渲染链路从此
+  真正不可失败，免去 per-item try 防御层）。
+- **工具描述前置投递时机**（实测反馈：零上下文 agent 两次把「自动送
+  达」脑补成即时投出，用连续 sleep 等气泡导致验证误判）：docstring
+  第一段以 ⚠️ 行前置「通知仅在会话空闲（agent 停手、回合结束）时投
+  出」一句；误导句「系统会自动把通知发到用户侧」删除；验证技巧与撤
+  回窗口细节不进描述（作者定稿：⚠️ 一句足够，细节留项目记忆）；短
+  描述（plugin.py / meta.tools，仅 UI 可见）同步一句话钩子。
+  **结构教训**：schema description 只取 docstring 第一段
+  （`split('\n\n')[0]`）——多段 Markdown 改写会把要点全部截丢，关
+  键信息必须压进第一段内用 `\n` 分行（实测 178 字符三行全可见）。
+- notice 工具 description（plugin.py / plugin.json meta.tools）同步
+  cancel 能力。
+
 ## [0.6.4] - 2026-10-16
 
 工具类别分组 + 插件更名与描述焕新。

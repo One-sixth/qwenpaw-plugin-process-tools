@@ -42,23 +42,32 @@ logger = logging.getLogger(__name__)
 async def process_tools_notice(
     process_id,
     interval_seconds: int = 0,
+    cancel: bool = False,
 ):
-    """若要动态接收后台进程状态的周期通知或结束通知，必须调用本工具注册进程状态通知：进程结束时推送一次完成通知；interval_seconds≥30 时每隔该秒数推送进度快照，长任务推荐 ≥900。可为单个或一批进程注册，编号逐个独立校验，无效编号不影响其他编号注册。注册后无需再用 wait 等待进程结束——系统会自动把通知发到用户侧并唤醒 agent。只能给运行中的进程注册；不存在/已结束的编号在结果中单独报告，已结束进程用 process_tools_check 获取结果。
+    """注册后台进程的完成/周期通知（进程结束推送状态并唤醒处理）；cancel=True 取消注册并撤回尚未投出的通知。
+⚠️ 通知只在会话空闲（你停止调用工具、回合结束）时投出：连续调工具期间挂起不出现、停手后补发。
+仅运行中进程可注册，已结束→报错并引导 process_tools_check。
 
-    Args:
-        process_id: 进程编号：单个（1 / "1" / "#1"）或编号列表（如 [1, 2]），逐个独立校验，任一无效不影响其他编号。
-        interval_seconds: 周期通知间隔秒数。0（默认）=仅完成通知；1~29 非法；≥30 生效（对整批共享）。
+Args:
+    process_id: 进程编号：单个（1 / "1" / "#1"）或编号列表（如 [1, 2]），逐个独立校验，任一无效不影响其他编号。
+    interval_seconds: 周期通知间隔秒数。0（默认）=仅完成通知；1~29 非法；≥30 生效（整批共享，长任务推荐 ≥900）。cancel=True 时忽略。
+    cancel: True=取消模式（默认 False=注册/更新通知）。
     """
     nums, err = parse_process_ids(process_id)
+    action = "取消通知" if cancel else "注册通知"
     if err or not nums:
-        return make_error("注册通知", err or "process_id 无效")
+        return make_error(action, err or "process_id 无效")
+
+    if cancel:
+        return _cancel_notices(nums)
+
     interval, ierr = parse_int(interval_seconds, "interval_seconds")
     if ierr:
-        return make_error("注册通知", ierr)
+        return make_error(action, ierr)
     interval = interval if interval is not None else 0
     if 0 < interval < MIN_INTERVAL_SECONDS:
         return make_error(
-            "注册通知",
+            action,
             f"周期通知间隔 {interval}s 太小（最小 {MIN_INTERVAL_SECONDS}s）",
             f"用 0 表示仅完成通知，或 ≥{RECOMMENDED_INTERVAL_SECONDS}s 做低频进度推送",
         )
@@ -106,6 +115,46 @@ def _apply_one(mp, interval: int, notifier) -> None:
         wake_channel=current_channel(),
     )
     notifier.register(mp, notice)
+
+
+def _cancel_notices(nums: list):
+    """取消模式：逐个取消注册并撤回待发通知（同步原子段，无 await）。
+
+    三态归档：已取消 / 无注册 / 不存在；部分成功语义同注册模式
+    （有已取消即 success）。已结束进程的完成通知若尚在聚合投递
+    窗口内，撤回正是本模式的核心价值场景（撤回条数不进报告——
+    作者定稿：知道取消成功即可）。
+    """
+    manager = get_manager()
+    notifier = get_notifier()
+    cancelled, unregistered, missing = [], [], []
+    for n in nums:
+        mp = manager.get(n)
+        if mp is None:
+            missing.append(n)
+            continue
+        if notifier.cancel(mp.key, mp.num) < 0:
+            unregistered.append(mp)
+        else:
+            cancelled.append(mp)
+
+    parts = []
+    if cancelled:
+        parts.append(
+            "已取消：" + "、".join(f"#{m.num}" for m in cancelled)
+        )
+    if unregistered:
+        parts.append(
+            f"无注册：{_enum_ints([m.num for m in unregistered])}"
+            "（没有已注册的通知）"
+        )
+    if missing:
+        parts.append(
+            f"不存在：{_enum_ints(missing)}"
+            "（用 process_tools_list 查看全部编号）"
+        )
+    text = "\n".join(parts)
+    return make_success(text) if cancelled else make_error(text)
 
 
 def _build_text(oks: list, missing: list, ended: list, interval: int) -> str:
