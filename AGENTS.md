@@ -12,6 +12,7 @@ QwenPaw增强多进程工具。注册 6 个 Agent 工具，提供托管后台进
 | `sanitizer.py` | 输出净化：ANSI 剥离、CRLF 归一、`\r` 覆写折叠、增量解码（codec 可配，默认 utf-8） |
 | `manager.py` | ProcessManager 注册表 + ManagedProcess 内核（环形缓冲/守护等待/杀树） |
 | `notifier.py` | 通知系统：注册制、完成幂等、周期任务、气泡+唤醒双投递 |
+| `sanitizer.py` | 输出净化：剥 ANSI 转义 / 折叠 \r 覆写 / 应用退格（终端级清洗，管道写入时落盘即净化） |
 | `web_api.py` | HTTP 状态端点：chat-status 转发 task_tracker running/idle + run 身份键（前端及时刷新伴生） |
 | `frontend/index.js` | 浏览器轮询脚本（零构建 ESM）：running × 发送按钮非 loading → reload 接直播；run 级去重每 run 至多两刷 |
 | `tools/exec.py` | process_tools_exec（前台/后台/detach + env/name/hide_window/encoding/no_shell/shell） |
@@ -22,7 +23,7 @@ QwenPaw增强多进程工具。注册 6 个 Agent 工具，提供托管后台进
 | `tools/notice.py` | process_tools_notice（完成/周期通知注册 + cancel 取消/撤回） |
 | `show_tool_schema.py` | 工具 schema 展示/导出脚本（生成 tools_schema.json） |
 | `docs/` | 深度调研归档（框架 execute_shell_command 调查报告） |
-| `tests/` | 193 个 pytest 用例（189 passed + 4 platform-skip，qwenpaw 环境运行） |
+| `tests/` | 195 个 pytest 用例（191 passed + 4 platform-skip，qwenpaw 环境运行） |
 
 ## 6 个工具清单
 
