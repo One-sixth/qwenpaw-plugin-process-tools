@@ -20,6 +20,7 @@ from tools.notice import process_tools_notice
 from tools.exec import process_tools_exec
 
 Notifier = notifier_mod.Notifier
+PendingNotice = notifier_mod.PendingNotice
 
 
 # ── 1) payload 保真：真实 user_id/session_id，绝不再写死 "main" ──
@@ -251,8 +252,8 @@ def test_deliver_enqueues_and_flusher_aggregates_console(monkeypatch):
     acc_key = ("agent-1", "user-x", "sess-9", "console")
 
     async def main():
-        await nt.deliver(key, "通知A", wake_channel="console")
-        await nt.deliver(key, "通知B", wake_channel="console")
+        await nt.deliver(key, PendingNotice(text="通知A"), wake_channel="console")
+        await nt.deliver(key, PendingNotice(text="通知B"), wake_channel="console")
         await _wait_flusher_done(nt, acc_key)
 
     run(main())
@@ -280,7 +281,7 @@ def test_deliver_enqueues_messenger_path(monkeypatch):
     acc_key = ("agent-1", "user-x", "wecom-sess", "wecom")
 
     async def main():
-        await nt.deliver(key, "通知A", wake_channel="wecom")
+        await nt.deliver(key, PendingNotice(text="通知A"), wake_channel="wecom")
         await _wait_flusher_done(nt, acc_key)
 
     run(main())
@@ -325,7 +326,7 @@ def test_deliver_surfaces_wake_failure_detail(monkeypatch):
     key = ("a", "u", "sess-fail")
 
     async def main():
-        await nt.deliver(key, "正文", wake_channel="console")
+        await nt.deliver(key, PendingNotice(text="正文"), wake_channel="console")
         await _wait_flusher_done(nt, ("a", "u", "sess-fail", "console"))
 
     run(main())
@@ -405,7 +406,7 @@ def test_notice_immediate_path_retired_no_delivery(monkeypatch):
 
     calls = []
 
-    async def fake_deliver(self, mp_key, text, wake_channel="console"):
+    async def fake_deliver(self, mp_key, pending, wake_channel="console"):
         calls.append(wake_channel)
         return "记录✅"
 

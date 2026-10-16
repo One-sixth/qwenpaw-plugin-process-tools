@@ -195,3 +195,18 @@ def test_make_result_marker_upper():
     assert make_result("y" * 100, max_chars=50) == (
         "y" * 50 + "\n<<<TRUNCATED>>> 内容已超出 max_chars 限制。"
     )
+
+
+def test_read_log_tail_toctou_returns_empty(monkeypatch):
+    """0.6.5：isfile 过后文件被并发删除/锁定（TOCTOU）→ 与"不存在"
+    同语义返回 ([], 0)，不抛 OSError（通知渲染链路不可失败的前提）。"""
+    import os
+
+    from utils import read_log_tail
+
+    def boom(path, *, follow_symlinks=True):
+        raise OSError("文件刚被删了")
+
+    monkeypatch.setattr(os.path, "getsize", boom)
+    lines, size = read_log_tail(__file__, tail_lines=5)
+    assert lines == [] and size == 0

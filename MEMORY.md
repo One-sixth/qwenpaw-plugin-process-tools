@@ -6,8 +6,8 @@
 
 ## 当前状态速览（2026-10-16）
 
-- **版本**：v0.6.4（meta.tools 逐条补 `category: "runtime"` UI 分组「运行与自动化」+ 插件更名「QwenPaw增强多进程工具」+ description 焕新，2026-10-16；**文件已同步装机目录，待作者重启生效**）。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`（已装机，零上下文子 agent 实机验证 10 项全 PASS）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量（`deefb3a`）→ 0.6.2 meta.tools（`a0a5a4b`）→ 0.6.3 转义+标记（`1b930e8`）→ 0.6.4 category+更名（`8737f5f`）。
-- **测试**：**180 passed + 4 skipped**（skip 全为平台守卫）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **版本**：v0.6.5（notice 新增 `cancel` 参数：取消注册 + 撤回聚合缓存中待发送的通知；聚合器 swap-and-clear 化——PendingNotice 对象缓存 + 投递前渲染 + 三道闸无锁互斥；`read_log_tail` 修 TOCTOU，2026-10-16；**开发树已验证，装机同步见下**）。0.6.4：meta.tools 逐条补 `category: "runtime"` UI 分组「运行与自动化」+ 插件更名「QwenPaw增强多进程工具」+ description 焕新（`8737f5f`，已装机待重启生效）。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`（已装机，零上下文子 agent 实机验证 10 项全 PASS）。历史：`4fb3c76`+`66bb3ac`（0.4.4）→ 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失（装机验证通过）→ 0.6.0 会话聚合器（双链路实机闭环：wecom 作者实测 + console agent 亲验）→ 0.6.1 notice 批量（`deefb3a`）→ 0.6.2 meta.tools（`a0a5a4b`）→ 0.6.3 转义+标记（`1b930e8`）→ 0.6.4 category+更名（`8737f5f`）。
+- **测试**：**189 passed + 4 skipped**（skip 全为平台守卫；含 0.6.5 新增 cancel 8 项 + read_log_tail TOCTOU 1 项）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
 - **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。**0.6.1 已装机实机冒烟通过**（2026-09-12）：混合批次三段式逐字命中 / 一行枚举+周期模式+JSON 字符串+幂等更新 / 全失败 error / 空列表参数错 / killed 聚合 ×2 通知 E2E（气泡+唤醒单回合，忙等时序正确）。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
@@ -28,6 +28,8 @@
 - **subprocess + 管道，无 PTY**（跨平台优先）；无前端 xterm 控制台；**零外部 pip 依赖**（纯标准库 + QwenPaw 自带 agentscope/httpx）。
 - **注册表 key = (agent_id, user_id, session_id)** 三元组；contextvar 由内核 `hooks/request_setup/contextvars_hook.py` 每请求注入，工具内直读 `qwenpaw.app.agent_context`。后台 asyncio.Task 创建时快照 context。
 - **通知双投递**：气泡 `qwenpaw.app.console_push_store.append(session_id, text, sticky=True)`；唤醒 `agents.tools.agent_management.submit_agent_chat_task`（POST /console/chat/task，httpx 放 to_thread）。409 会话忙 → 30s 重试 ×20 上限。**0.4.4 起无开关，气泡+唤醒固定双投递**（wake_agent 参数已删：False 时 agent 行动链断裂，自由度弊大于利）。
+- **通知投递时机 = 会话空闲才 flush（行为契约，0.6.5 起写进工具描述）**：通知入队后，agent 连续调工具期间（会话活跃）唤醒端点 409 → flusher 忙等挂起、气泡也不发——**活跃时通知压在队列里不出现，停手/回合结束那一刻才补发**。docstring ⚠️ 行只保留投递时机一句（作者定稿：够用即可）；两条推论留记忆不进描述：①验证「是否投出」勿连续 sleep/轮询等气泡（活跃永远等不到，两次实测误判 E1 的根源），等自己回合结束自然补发；②活跃时 cancel 几乎必中撤回（批次未消费或渲染前被 cancelled 标志过滤），停手超聚合窗口（约 3s）即投出失效。教训：**工具行为中 agent 不可见的时序特性必须前置写进描述**，只记项目记忆对零上下文 agent 无效。
+
 - 导入与 file-tools 同款：相对导入 + try/except ImportError 双模式；docstring `Args:` 即参数 schema；`make_success/make_error` 统一 ToolChunk；6 工具全 async。
 - 治理：全工具 `tool_type="shell"`；仅 exec `target_param="command"`。
 - **工具时态三分（作者定稿）**：notice=未来事件（仅运行中可注册，已结束→error 引导 check）／check=当下与过去／wait=未完成。**勿回退**成 wait/check 并列引导。
@@ -74,6 +76,8 @@
 | 0.6.1 | notice 批量注册：逐个独立校验（部分成功语义，有生效即 success）、三段式结果消息（已生效/不存在/已结束，空段跳过零特例） | 消息表经三轮迭代定稿：逐行→分组同类项→三段式；引导语每类最多一次；「新注册 vs 更新」合并为「已生效」；单进程旧文案同步退役 |
 | 0.6.3 | 命令/name 控制字符转义显示（`escape_ctrl`）+ 截断标记统一 `<<<TRUNCATED>>>` | 只动展示层，存储 `mp.command`/`mp.name` 原串不动；**先截断后转义**（控制字符单字符，截断点不劈开转义序列，无悬空反斜杠）；list/wait 摘要原"换行→空格"均换同款转义；name 10 处展示点同款包转义；标记对齐框架风格。**双盲复审教训：用户可控字段（command、name）的展示点枚举必须全仓 grep**——首版漏 wait.py 展示点 + summary_line 转义截断反序（悬空反斜杠），name 点位子 agent 也只列了 7/10 |
 | 0.6.4 | meta.tools 逐条补 `"category": "runtime"`（UI 分组「运行与自动化」）+ 更名「QwenPaw增强多进程工具」+ description 焕新 | category 走 `GET /tools` 端点实时读 PluginRegistry 缓存的 manifest，**不进 agent.json 快照**——存量 agent 无需直改 agent.json，重启即生效（与 meta.tools 补快照条目机制分属两层，见知识库《QwenPaw插件工具可见性机制》）；与 file-tools v1.8.2 同款做法；更名同步 plugin.json/README/AGENTS，CHANGELOG 0.1.0 历史条目原文保留；复验脚本 workspace `tools/review_process_tools_v064.py` |
+| 0.6.5 | notice 新增 `cancel` 参数（取消注册 + 撤回聚合缓存待发通知）+ 聚合器 swap-and-clear 化 + `read_log_tail` 修 TOCTOU | 设计与作者五轮推演定稿：PendingNotice 对象缓存 + **投递前一刻渲染**（完成通知冻结一致、周期通知时间戳更新鲜）+ 无锁三道闸（cancelled 短路 / cancel 清扫 / 渲染前过滤），cancel 全程无 await 点与 flusher 天然互斥；拿走即消费（ok/fail/异常均无删除操作），**异常批次从"保留"改"丢弃"**（杜绝毒丸批次，测试语义同步变更）；busy 放回仅 survivors（渲染失败不回炉）；互斥量方案因"flusher 消费含 HTTP 最长 330s、同步段本就原子"被无锁方案替代 |
+
 
 ### 刷新判据演化（0.3.2 终稿，防走回头路）
 

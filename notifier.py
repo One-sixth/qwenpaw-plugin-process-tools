@@ -4,22 +4,28 @@
 核心语义：
 
 - **opt-in**：后台进程不自动推送任何东西，必须显式 notice 注册；
-- **完成通知幂等**：`completion_sent` 标记防重复；
+  0.6.5 起支持 ``cancel=True`` 取消注册并撤回待发通知；
+- **完成通知幂等**：``completion_sent`` 标记防重复；``cancelled``
+  注册后 exit 不再入队完成通知（三道闸之一）；
 - **周期通知**：interval_seconds ≥ 30 才生效，进程退出即取消；
-- **会话聚合投递**（0.6.0，全部会话类型统一逻辑）：
-  通知不直接投递，进入所属会话的**累积器**（内存态，仅本进程内有效，
-  宿主关闭/崩溃即丢弃、无恢复）：
+- **会话聚合投递**（0.6.0 统一逻辑，0.6.5 swap-and-clear 化）：
+  通知不直接投递，以 PendingNotice 对象进入所属会话的**累积器**
+  （内存态，仅本进程内有效，宿主关闭/崩溃即丢弃、无恢复），
+  **投递前一刻才渲染文本**（撤回的最小窗口 = 渲染完成到 HTTP 发出）：
     1. 首条通知启动 flusher，睡 ``FLUSH_WINDOW_SECONDS``（3s）聚合
        后续通知；
-    2. 窗口到点投递：会话忙（console 唤醒 409 / 信使 gate+tracker）
-       → 再等 3s **忙等无上限、永不放弃**，期间新通知继续累积；
-    3. 会话空闲 → 取走累积**全部**通知，聚合为一条文本一口气投出：
-       console = 一条气泡 + 一个唤醒回合；非 console = 一个信使回合
-       （agent 一条回复覆盖全部通知）；
-    4. 投递期间新到的通知进入下一轮聚合；队列空则 flusher 退出，
-       下条通知懒启动。
+    2. 窗口到点**原子拿走全部累积并清空队列**（拿走即消费）→ 渲染
+       时过滤已取消条目（三道闸之二）→ 空则退出；队列已空，投递
+       期间新通知直接入队、不受本批影响；
+    3. 会话忙（console 唤醒 409 / 信使 gate+tracker）→ 渲染存活的
+       条目**放回队首**（保持顺序，已取消/渲染失败的不放回）再等
+       3s **忙等无上限、永不放弃**；
+    4. 会话空闲 → 取走批次聚合为一条文本一口气投出；ok/fail 批次
+       自然消失（无删除操作）；队列空则 flusher 退出，下条通知懒启动。
   真失败（频道未配置/回合异常）不重试，记日志；busy 是唯一重试态。
   投递函数全部单次语义（无内部重试循环），重试节奏单点归 flusher。
+  无锁设计：单线程事件循环 + 全同步原子段（cancel/拿走/放回均无
+  await 点），交错安全由「三道闸」保证，见 cancel/_render_batch。
 
 console 会话（双投递）：
   1. 通知气泡：``console_push_store.append(session_id, text, sticky=True)``
@@ -88,10 +94,41 @@ class Notice:
     completion_sent: bool = False
     exit_listener_added: bool = False  # 防重复注册叠加监听（R9）
     periodic_task: Optional[asyncio.Task] = None
+    # 0.6.5 cancel 闸①：置位后 exit 不再入队完成通知、渲染段跳过其
+    # 待发条目。注册记录同时已从 _notices 弹出，标志兜底仍在途引用。
+    cancelled: bool = False
     registered_at: float = field(default_factory=time.time)
 
     def interval_active(self) -> bool:
         return self.interval_seconds >= MIN_INTERVAL_SECONDS
+
+
+@dataclass(eq=False)
+class PendingNotice:
+    """聚合缓存条目：注册引用（可撤回）+ 延迟渲染上下文（0.6.5）。
+
+    eq=False：flusher/cancel 按对象身份过滤（swap-and-clear 拿走即
+    消费，不做字段相等比较）。notice=None 表示**不可撤回**的直通
+    条目（预渲染文本，测试/外部直通用）。
+    """
+
+    notice: Optional[Notice] = None
+    mp: Optional["ManagedProcess"] = None
+    kind: str = "completion"  # completion | periodic
+    text: Optional[str] = None  # 直通模式（预渲染文本，优先于延迟渲染）
+
+    def render(self, notifier: "Notifier") -> str:
+        """投递前一刻渲染：直通文本原样；否则按 kind 构建最新文本。
+
+        完成通知在进程结束后渲染，exit_code/时长/日志尾部已冻结，
+        内容与前置生成一致；周期通知时间戳取投递时刻（更新鲜）。
+        渲染链路全兜底（read_log_tail TOCTOU 已在源头修），不可失败。
+        """
+        if self.text is not None:
+            return self.text
+        if self.kind == "periodic":
+            return notifier.build_periodic_text(self.mp)
+        return notifier.build_completion_text(self.mp)
 
 
 class Notifier:
@@ -125,6 +162,28 @@ class Notifier:
     def set_notice(self, key: tuple, notice: Notice) -> None:
         """登记 Notice 对象（不挂监听不启动周期任务，用于恢复/补记场景）。"""
         self._notices.setdefault(key, {})[notice.process_num] = notice
+
+    def cancel(self, key: tuple, num: int) -> int:
+        """取消注册并撤回待发通知（0.6.5，同步原子段）。
+
+        弹出注册记录 + 停周期任务 + 置 cancelled（闸①）+ 清扫聚合
+        队列中本 notice 的待发条目（闸②）。全程无 await 点——单线程
+        事件循环下 flusher 不可能交错进本段，无需锁。
+
+        Returns:
+            撤回的待发条数；-1 = 该编号无注册通知。
+        """
+        notice = self._notices.get(key, {}).pop(num, None)
+        if notice is None:
+            return -1
+        notice.cancelled = True
+        self._stop_periodic(notice)
+        acc = self._accumulators.get((*key, notice.wake_channel))
+        if acc is None:
+            return 0
+        before = len(acc.items)
+        acc.items[:] = [p for p in acc.items if p.notice is not notice]
+        return before - len(acc.items)
 
     def _make_exit_listener(self, mp: "ManagedProcess", notice: Notice):
         async def _on_exit(proc: "ManagedProcess", event: str) -> None:
@@ -172,14 +231,14 @@ class Notifier:
     async def deliver(
         self,
         mp_key: tuple,
-        text: str,
+        pending: PendingNotice,
         wake_channel: str = "console",
     ) -> str:
-        """通知入队（聚合器统一入口，0.6.0）。
+        """通知入队（聚合器统一入口，0.6.5 起收 PendingNotice 对象）。
 
-        通知进入所属会话的累积器，由 flusher 聚合投递：首条通知启动
-        3s 聚合窗口；窗口到点会话忙则 3s 忙等（**无上限、永不放弃**，
-        期间通知继续累积）；空闲时取走全部累积一口气投出。仅内存态：
+        通知对象进入所属会话的累积器，由 flusher 聚合投递：首条通知
+        启动 3s 聚合窗口；窗口到点原子拿走全部累积并清空队列，渲染
+        后投递；会话忙则 3s 忙等（**无上限、永不放弃**）。仅内存态：
         宿主关闭/崩溃则未投递通知丢弃，无恢复语义。
 
         mp_key = (agent_id, user_id, session_id)
@@ -192,7 +251,7 @@ class Notifier:
         if acc is None:
             acc = _NoticeAccumulator(channel=wake_channel)
             self._accumulators[key] = acc
-        acc.items.append(text)
+        acc.items.append(pending)
         if acc.flusher_task is None or acc.flusher_task.done():
             acc.flusher_task = asyncio.create_task(self._flusher(key, acc))
         logger.info(
@@ -209,42 +268,64 @@ class Notifier:
         sep = "\n\n" + "─" * 24 + "\n\n"
         return f"【进程通知聚合 ×{len(items)}】\n\n" + sep.join(items)
 
-    async def _flusher(self, key: tuple, acc: _NoticeAccumulator) -> None:
-        """会话聚合投递循环（内存态，随任务结束丢弃）。
+    def _render_batch(self, batch: list) -> tuple:
+        """渲染批次：过滤已取消条目，返回 (texts, survivors)。
 
-        节奏：睡一个聚合窗口 → 会话忙则继续以窗口粒度忙等（无上限，
-        期间新通知持续累积）→ 空闲时取走全部累积一口气投递 → 投递
-        期间新到的进下一轮；队列空则退出（下条通知懒启动）。
+        0.6.5 三道闸之三：渲染前按注册引用跳过 cancelled 条目——
+        兜底「flusher 拿走批次之后 cancel 才发生」的窗口。texts 与
+        survivors 一一对应；渲染链路全兜底不可失败（read_log_tail
+        TOCTOU 已在源头修），无 per-item try。
+        """
+        texts, survivors = [], []
+        for p in batch:
+            if p.notice is not None and p.notice.cancelled:
+                continue
+            texts.append(p.render(self))
+            survivors.append(p)
+        return texts, survivors
+
+    async def _flusher(self, key: tuple, acc: _NoticeAccumulator) -> None:
+        """会话聚合投递循环（0.6.5 swap-and-clear：拿走即消费）。
+
+        节奏：睡一个聚合窗口 → **原子拿走全部累积并清空队列**（本段
+        与渲染均无 await 点，cancel 不可能交错）→ 渲染（过滤已取消）
+        → 全被取消则退出 → 投递（队列已空，新通知直接入队不受本批
+        影响）→ busy 则渲染存活的条目放回队首下轮重试 → ok/fail 批次
+        自然消失（无删除操作）；队列空则退出（下条通知懒启动）。
         """
         try:
             while True:
                 await asyncio.sleep(FLUSH_WINDOW_SECONDS)
-                batch = list(acc.items)
+                batch, acc.items = acc.items, []  # 原子拿走+清空
                 if not batch:
                     return  # 队列空 → flusher 退出
-                text = self._join_notice_text(batch)
+                texts, survivors = self._render_batch(batch)
+                if not texts:
+                    return  # 全被取消 → 批次丢弃，flusher 退出
+                text = self._join_notice_text(texts)
                 status, detail = await self._deliver_once(
                     key, text, acc.channel,
                 )
                 if status == "busy":
-                    # 忙：本批不消费（新通知继续累积），下轮重新聚合
+                    # 忙：渲染存活的条目放回队首（保持顺序），下轮重新聚合
+                    acc.items[:0] = survivors
                     logger.info(
                         "proc-tools 会话 %s 忙，%ds 后重试聚合投递",
                         key[2][:30], int(FLUSH_WINDOW_SECONDS),
                     )
                     continue
-                # ok / fail 都消费本批（fail 不重试，作者拍板）
-                del acc.items[:len(batch)]
+                # ok / fail 都消费本批（fail 不重试，作者拍板）——
+                # 批次已拿走即已消费，无需任何删除操作
                 if status == "ok":
                     logger.info(
                         "proc-tools 会话 %s 聚合投递成功（%d 条）：%s",
-                        key[2][:30], len(batch), detail,
+                        key[2][:30], len(texts), detail,
                     )
                 else:
                     logger.warning(
                         "proc-tools 会话 %s 聚合投递失败（%d 条，"
                         "不重试）：%s",
-                        key[2][:30], len(batch), detail,
+                        key[2][:30], len(texts), detail,
                     )
                 # 回到外层：投递期间新到的通知再睡一个窗口聚合
         except asyncio.CancelledError:
@@ -298,13 +379,12 @@ class Notifier:
             return f"气泡❌({type(e).__name__})"
 
     async def _send_completion(self, mp: "ManagedProcess", notice: Notice) -> None:
-        if notice.completion_sent:
+        if notice.completion_sent or notice.cancelled:
+            # cancelled（0.6.5 闸①）：已取消注册，完成通知不再入队
             return
         notice.completion_sent = True
-        text = self.build_completion_text(mp)
-        result = await self.deliver(
-            mp.key, text, notice.wake_channel,
-        )
+        pending = PendingNotice(notice=notice, mp=mp, kind="completion")
+        result = await self.deliver(mp.key, pending, notice.wake_channel)
         logger.info("proc #%d 完成通知已入队：%s", mp.num, result)
 
     async def _wake_once(
@@ -498,9 +578,11 @@ class Notifier:
                     await asyncio.sleep(notice.interval_seconds)
                     if mp.status != "running":
                         break
-                    text = self.build_periodic_text(mp)
+                    pending = PendingNotice(
+                        notice=notice, mp=mp, kind="periodic",
+                    )
                     await self.deliver(
-                        mp.key, text,
+                        mp.key, pending,
                         notice.wake_channel,
                     )
             except asyncio.CancelledError:

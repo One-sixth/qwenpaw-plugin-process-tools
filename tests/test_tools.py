@@ -164,13 +164,22 @@ def test_communicate_sigint_running_process():
 
 
 class _Recorder:
-    """替身 deliver：记录通知，不真投递。"""
+    """替身 deliver：记录通知（渲染后文本），不真投递。
+
+    0.6.5 deliver 收 PendingNotice 对象：此处渲染后记录文本（断言
+    形态与 0.6.x 一致），并保留原始对象供撤回相关断言。
+    """
 
     def __init__(self):
-        self.calls = []
+        self.calls = []  # (mp_key, 渲染文本, wake_channel)
+        self.pendings = []  # 原始 PendingNotice
 
-    async def fake(self, mp_key, text, wake_channel="console"):
-        self.calls.append((mp_key, text, wake_channel))
+    async def fake(self, mp_key, pending, wake_channel="console"):
+        # rec.fake 是绑定方法，self=rec——渲染需显式取 notifier 单例
+        self.pendings.append(pending)
+        self.calls.append(
+            (mp_key, pending.render(notifier_mod.get_notifier()), wake_channel),
+        )
         return "记录✅"
 
 
@@ -242,9 +251,13 @@ def test_send_completion_concurrent_double_delivers_once(monkeypatch):
     只能执行一次（检查+置位同一同步段，中间不得有 await）。
     旧落点「notice 立即投递」已随 0.4.2 设计废除。"""
     class SlowRec(_Recorder):
-        async def fake(self, mp_key, text, wake_channel="console"):
+        async def fake(self, mp_key, pending, wake_channel="console"):
             await asyncio.sleep(0.3)
-            self.calls.append((mp_key, text, wake_channel))
+            # 绑定方法 self=rec——渲染需显式取 notifier 单例
+            self.pendings.append(pending)
+            self.calls.append(
+                (mp_key, pending.render(notifier_mod.get_notifier()), wake_channel),
+            )
             return "记录✅"
 
     rec = SlowRec()
