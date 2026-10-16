@@ -210,3 +210,99 @@ def test_read_log_tail_toctou_returns_empty(monkeypatch):
     monkeypatch.setattr(os.path, "getsize", boom)
     lines, size = read_log_tail(__file__, tail_lines=5)
     assert lines == [] and size == 0
+
+
+# ── resolve_cwd / get_tool_base_dir：对齐内核 cwd 语义（0.6.8） ──
+
+
+def test_resolve_cwd_empty_returns_empty():
+    from utils import resolve_cwd
+
+    assert resolve_cwd("") == ""
+    assert resolve_cwd(None) == ""  # 防御：通道传 null
+
+
+def test_resolve_cwd_relative_mounts_first_project_dir(monkeypatch, tmp_dir):
+    """相对 cwd 挂第一个项目目录（内核 roots[0] 语义）。"""
+    from pathlib import Path
+
+    import utils as utils_mod
+
+    proj_a = os.path.join(tmp_dir, "proj_a")
+    proj_b = os.path.join(tmp_dir, "proj_b")
+    os.makedirs(proj_a)
+    monkeypatch.setattr(
+        utils_mod, "get_project_dir_paths", lambda: [proj_a, proj_b]
+    )
+    got = utils_mod.resolve_cwd("sub/dir")
+    expected = str(Path(os.path.join(proj_a, "sub", "dir")).resolve())
+    assert got == expected
+
+
+def test_resolve_cwd_relative_falls_back_to_base_dir(monkeypatch, tmp_dir):
+    """无项目目录配置 → 挂 get_tool_base_dir()（内核 or [base_dir] 语义）。"""
+    from pathlib import Path
+
+    import utils as utils_mod
+
+    base = os.path.join(tmp_dir, "ws")
+    os.makedirs(base)
+    monkeypatch.setattr(utils_mod, "get_project_dir_paths", lambda: [])
+    monkeypatch.setattr(utils_mod, "get_tool_base_dir", lambda: base)
+    got = utils_mod.resolve_cwd("sub")
+    assert got == str(Path(os.path.join(base, "sub")).resolve())
+
+
+def test_resolve_cwd_relative_no_base_returns_empty(monkeypatch):
+    """连基准目录都没有 → 返回 "" 交由调用方二次回落，绝不拿宿主进程
+    cwd 拼相对路径（旧 abspath 行为的 bug 不许回归）。"""
+    import utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "get_project_dir_paths", lambda: [])
+    monkeypatch.setattr(utils_mod, "get_tool_base_dir", lambda: "")
+    assert utils_mod.resolve_cwd("sub") == ""
+
+
+def test_resolve_cwd_absolute_untouched(tmp_dir):
+    """绝对路径 expanduser 后照用，不挂基准目录。"""
+    from pathlib import Path
+
+    import utils as utils_mod
+
+    target = os.path.join(tmp_dir, "abs_dir")
+    os.makedirs(target)
+    assert utils_mod.resolve_cwd(target) == str(Path(target).resolve())
+
+
+def test_resolve_cwd_expanduser():
+    """~ 前缀先展开（内核 Path.expanduser 同款）。"""
+    from pathlib import Path
+
+    import utils as utils_mod
+
+    assert utils_mod.resolve_cwd("~") == str(
+        Path(os.path.expanduser("~")).resolve()
+    )
+
+
+def test_get_tool_base_dir_kernel_unavailable_falls_back(monkeypatch):
+    """内核导入失败（无 qwenpaw 环境）→ 回落 get_workspace_dir()。"""
+    import sys
+
+    import utils as utils_mod
+
+    monkeypatch.setitem(sys.modules, "qwenpaw", None)
+    monkeypatch.setitem(sys.modules, "qwenpaw.config", None)
+    monkeypatch.setitem(sys.modules, "qwenpaw.config.context", None)
+    monkeypatch.setattr(utils_mod, "get_workspace_dir", lambda: "D:\\fake_ws")
+    assert utils_mod.get_tool_base_dir() == "D:\\fake_ws"
+
+
+def test_get_tool_base_dir_passthrough_when_kernel_available():
+    """qwenpaw 可导入时透传内核值（project dir → workspace → WORKING_DIR，
+    str 化）；非空必为绝对路径。"""
+    import utils as utils_mod
+
+    got = utils_mod.get_tool_base_dir()
+    assert isinstance(got, str)
+    assert got == "" or os.path.isabs(got)

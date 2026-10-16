@@ -10,7 +10,7 @@ try:
     from ..manager import get_manager
     from ..utils import (
         escape_ctrl,
-        get_workspace_dir,
+        get_tool_base_dir,
         make_error,
         make_success,
         parse_argv,
@@ -25,7 +25,7 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
     from manager import get_manager
     from utils import (
         escape_ctrl,
-        get_workspace_dir,
+        get_tool_base_dir,
         make_error,
         make_success,
         parse_argv,
@@ -62,7 +62,7 @@ async def process_tools_exec(
         command: 要执行的 shell 命令字符串（语法随 shell 参数，跨平台自行负责）；no_shell=True 时改传 argv 列表（如 ["python", "-c", "print(1)"]，或其 JSON 数组字符串）。
         background: 是否后台运行。False=前台等待结束再返回（默认），True=启动后立即返回进程编号。
         timeout: 前台模式等待秒数，超时后强杀进程并返回超时前输出末尾倒数 20 行。0 或负数表示永不超时一直等。后台模式忽略此参数。
-        cwd: 工作目录，相对路径相对于 workspace。空串表示使用 workspace 目录。
+        cwd: 工作目录，相对路径相对于第一个项目目录（未配置项目目录时相对于 workspace）。空串表示使用项目目录（未配置时 workspace）。
         max_output_chars: 前台模式返回输出的字符上限，超出则截断并提示完整日志路径，上限 16384。
         name: 给人看的进程标签（≤80 字符），出现在 exec/check/list 与通知里，多进程并跑时方便认亲；纯展示不影响执行。
         env: 增量环境变量，传 JSON 字典（如 {"PYTHONUNBUFFERED": "1"}），在宿主环境之上叠加、只对本进程生效。
@@ -122,9 +122,11 @@ async def process_tools_exec(
     mo_chars = min(max(parsed_max if parsed_max is not None else 4096, 1),
                    OUTPUT_HARD_CAP)
 
-    resolved_cwd = resolve_cwd(cwd)
+    # resolve() 真实走文件系统（断连网络盘可阻塞数十秒），丢线程防卡事件
+    # 循环（内核 execute_shell_command 同款处理）；空串回落基准目录。
+    resolved_cwd = await asyncio.to_thread(resolve_cwd, cwd)
     if not resolved_cwd:
-        resolved_cwd = get_workspace_dir() or ""
+        resolved_cwd = get_tool_base_dir() or ""
 
     manager = get_manager()
 
