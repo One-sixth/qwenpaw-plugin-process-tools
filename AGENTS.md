@@ -19,10 +19,10 @@ QwenPaw增强多进程工具。注册 6 个 Agent 工具，提供托管后台进
 | `tools/list.py` | process_tools_list（会话进程清单） |
 | `tools/wait.py` | process_tools_wait（单/批 all 等待，超时不杀） |
 | `tools/communicate.py` | process_tools_communicate（write_stdin / read_stdout / send_sigint / send_sigkill） |
-| `tools/notice.py` | process_tools_notice（完成/周期通知注册） |
+| `tools/notice.py` | process_tools_notice（完成/周期通知注册 + cancel 取消/撤回） |
 | `show_tool_schema.py` | 工具 schema 展示/导出脚本（生成 tools_schema.json） |
 | `docs/` | 深度调研归档（框架 execute_shell_command 调查报告） |
-| `tests/` | 136 个 pytest 用例（132 passed + 4 platform-skip，qwenpaw 环境运行） |
+| `tests/` | 193 个 pytest 用例（189 passed + 4 platform-skip，qwenpaw 环境运行） |
 
 ## 6 个工具清单
 
@@ -31,7 +31,8 @@ QwenPaw增强多进程工具。注册 6 个 Agent 工具，提供托管后台进
 3. `process_tools_check` — 单进程状态 + 输出日志尾部
 4. `process_tools_wait` — 前台等待一个/一批进程结束（all 语义，超时不杀）
 5. `process_tools_communicate` — stdin 写入 / stdout 环形缓冲增量读 / sigint / sigkill
-6. `process_tools_notice` — 注册完成/周期通知（气泡 + 唤醒 agent）。
+6. `process_tools_notice` — 注册完成/周期通知（气泡 + 唤醒 agent）；
+   cancel=True 取消注册并撤回尚未投出的通知（通知仅会话空闲时投递）。
    时态三分：notice 只管**未来事件**（仅运行中可注册，已结束→error），
    **当下与过去**归 check，**未完成**归 wait。
 
