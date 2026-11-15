@@ -498,8 +498,8 @@ class ManagedProcess:
         """子进程 OS pid（启动失败或未 spawn 时为 None）。"""
         return self._proc.pid if self._proc else None
 
-    def summary_line(self) -> str:
-        """list 工具用的一行摘要。"""
+    def summary_line(self, state_tag: str = "") -> str:
+        """list 工具用的一行摘要。state_tag 插在状态段内（如通知标记）。"""
         mins, secs = divmod(int(self.elapsed()), 60)
         state = self.status
         code = "" if self.exit_code is None else f" exit={self.exit_code}"
@@ -510,7 +510,7 @@ class ManagedProcess:
             cmd = cmd[:80] + "<<<TRUNCATED>>>"
         cmd = escape_ctrl(cmd)
         return (
-            f"#{self.num}{label} [{state}{code}] {mins // 60:02d}:"
+            f"#{self.num}{label} [{state}{state_tag}{code}] {mins // 60:02d}:"
             f"{mins % 60:02d}:{secs:02d} $ {cmd}"
         )
 

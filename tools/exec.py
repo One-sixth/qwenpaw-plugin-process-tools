@@ -56,7 +56,7 @@ async def process_tools_exec(
     no_shell: bool = False,
     shell: str = "auto",
 ):
-    """启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_wait 等待进程结束、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令默认在 shell=auto 下由选中的解释器以管道方式执行（Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落），无 TTY；进度条类程序会自行降级为普通输出。返回信息会写明实际使用的 shell 与编码。detach=True 时改为启动完全不受本插件托管的 OS 进程（只回 PID，管道/超时/通知等托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启、不经 shell。
+    """启动一条 shell 命令作为托管进程运行。background=False 前台等待结束后返回净化输出（超时自动杀进程）；background=True 立即返回进程编号，进程后台持续运行。detach=True 启动不受托管的 OS 进程（只回 PID，托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启。
 
     Args:
         command: 要执行的 shell 命令字符串（语法随 shell 参数，跨平台自行负责）；no_shell=True 时改传 argv 列表（如 ["python", "-c", "print(1)"]，或其 JSON 数组字符串）。

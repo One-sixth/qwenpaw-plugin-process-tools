@@ -2,6 +2,55 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.9] - 2026-11-15
+
+`process_tools_list` 显示运行中进程的通知注册状态。
+
+### Added
+- **通知注册标记**：运行中进程已注册通知时，状态方括号内带 🔔 标记
+  （`[running 🔔周期900s+完成通知]` / `[running 🔔完成通知]`），插在
+  状态之后、exit code 之前——不出现在命令之后。周期注册时周期间隔
+  与完成通知**都显示**（作者定稿）；仅完成通知注册只显示完成。
+- **显示语义**：仅 `running` 进程显示——已结束进程的注册记录在完成
+  通知发出后仍残留于 `_notices`（`completion_sent` 只置位不弹出），
+  list 侧按状态过滤；`cancel` 后注册记录已弹出，`get` 返回 None
+  天然不显示。header 不加通知计数（作者定稿）。
+- **`summary_line(state_tag="")`**：`ManagedProcess` 摘要行新增可选
+  状态段标记参数（tag 为空时输出与旧版逐字节一致）；manager 层不
+  import notifier，通知查询在 list 工具层完成（分层不破坏）。
+- **测试**：新增 `tests/test_list_notice_tag.py` 7 用例（完成标记 /
+  周期+完成双标记 / cancel 后消失 / 已结束不显示 / 未注册无标记 /
+  多进程混合注册状态 / 空 tag 恒等断言）。全量 **210 passed +
+  3 skipped**（旧集合中 1 条 importorskip 环境守卫本机环境变化从
+  skip 转 passed，总数守恒，与本次改动无关）。
+
+### Reviewed（2026-11-15 三路无上下文对抗复审 A/B/C）
+- **修复 mock 休眠地雷（C-1，中）**：`_silent_deliver` 补 `self`
+  首参——挂到 Notifier 类属性后实例调用会绑定 self，缺参则 exit
+  listener 真实运行时 TypeError（对齐 test_notice_cancel.py 惯例）。
+- **修复 `tools_schema.json` 未重生成（B-1，中）**：该文件是
+  `show_tool_schema.py` 生成产物（git 跟踪、历史惯例每版同步），
+  已按最终 docstring 重新生成。
+- **docstring 补全（B-3）**：明说周期注册时完成通知一并显示。
+- **断言增强（C-2）**：标记位置由存在性断言改为 `index("[running")
+  < index("$")` 位置断言。
+- **`set_notice` docstring 标注（A-1）**：经此登记带 interval 的
+  记录会显示周期标记但无实际周期任务（死路径，防未来恢复功能踩坑）。
+- **复审确认不修**：负数 interval 未拦截（既有行为，范围外）；notice
+  回执「进度通知」与 list 标记「周期Ns」措辞差异（语义已验证无矛盾）。
+
+### Scaled（2026-11-16 docstring 精简）
+- **6 工具 docstring 全精简**：exec 350→120 / check 90→50 / wait 150→70 /
+  communicate 250→100 / list 200→70 字（notice 已精简不动）。砍掉内部实现
+  （session 隔离、shell 回落顺序、环形缓冲容量、Windows 0xC000013A 细节、
+  工具关联列表），保留核心行为 + 输出格式 + 参数语义。
+- **子 agent 盲测验证**：清晰请求（7 步逐步指引）+ 模糊请求（"帮我跑一个
+  命令，跑完告诉我输出了什么"）均零试错通过——精简未丢必要信息，运行时
+  输出自解释承接细节。
+- **作用域定稿**：check / wait 不显示通知标记（作者 2026-11-15 拍板：
+  🔔 标记只属于 list 的列表视图）。
+
+
 ## [0.6.8] - 2026-10-17
 
 `process_tools_exec` 的 cwd 语义对齐内核 `get_tool_base_dir`。

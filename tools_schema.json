@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_exec",
-      "description": "启动一条 shell 命令作为托管进程运行，进程归当前会话所有、编号 #N 单调分配。background=False 时前台等待命令结束后返回完整净化输出（超时自动杀进程并返回超时前输出末尾）；background=True 时立即返回进程编号，进程在后台持续运行，用 process_tools_check 查状态、process_tools_wait 等待进程结束、process_tools_notice 挂完成通知、process_tools_communicate 交互。命令默认在 shell=auto 下由选中的解释器以管道方式执行（Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落），无 TTY；进度条类程序会自行降级为普通输出。返回信息会写明实际使用的 shell 与编码。detach=True 时改为启动完全不受本插件托管的 OS 进程（只回 PID，管道/超时/通知等托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启、不经 shell。",
+      "description": "启动一条 shell 命令作为托管进程运行。background=False 前台等待结束后返回净化输出（超时自动杀进程）；background=True 立即返回进程编号，进程后台持续运行。detach=True 启动不受托管的 OS 进程（只回 PID，托管能力全部失效）；no_shell=True 时 command 传 argv 列表原生直启。",
       "parameters": {
         "properties": {
           "command": {
@@ -86,7 +86,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_list",
-      "description": "列出当前会话创建的全部托管进程（每行：编号、状态、退出码、运行时长、命令摘要）。进程按会话隔离，看不到也管不了其他会话的进程。默认列出最近创建的 10 个，新进程在前；limit≤0 列出全部。",
+      "description": "列出当前会话的托管进程，每行：编号、状态、退出码、运行时长、命令摘要。\n已注册通知的运行中进程带 🔔 标记。",
       "parameters": {
         "properties": {
           "limit": {
@@ -103,7 +103,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_check",
-      "description": "查看本会话某个托管进程的当前状态：运行中/已完成/失败/已终止、退出码、已运行时长、命令、日志路径，以及净化输出日志的末尾若干行。已结束进程同样可查（历史保留在会话内）。",
+      "description": "查看某个托管进程的当前状态：状态、退出码、已运行时长、命令、日志路径，以及输出日志末尾若干行。已结束进程同样可查。",
       "parameters": {
         "properties": {
           "process_id": {
@@ -126,7 +126,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_wait",
-      "description": "前台等待一个或一批后台进程结束（all 语义：全部结束才返回）。适用「background 启动后先干别的，快结束时回来等待进程结束」。与前台 exec 的本质区别：本工具只是等待者——超时只报「仍运行中」，绝不杀进程；被取消也只放弃等待，进程不受影响。已结束进程立即幂等返回终态。detach 脱离进程对本插件不可见，无法用本工具等待（需按 PID 用系统命令自理）。",
+      "description": "前台等待一个或一批后台进程结束（all 语义：全部结束才返回）。超时只报「仍运行中」，绝不杀进程。已结束进程立即返回终态。",
       "parameters": {
         "properties": {
           "process_id": {
@@ -154,7 +154,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_communicate",
-      "description": "与托管进程交互。action 四选一：write_stdin=向进程标准输入写文本（应答交互提示、给 REPL 送代码等）；read_stdout=从 512KB 环形缓冲读取原始输出（净化后文本，按 read_offset 增量续读，适合轮询长时间运行的进度）；send_sigint=发送中断信号（POSIX 下程序可捕获做优雅退出/checkpoint；**Windows 实测 handler 不会执行**，进程被 OS 以 0xC000013A 直接终止，相当于略轻于 sigkill 的第二档硬杀，优雅退出请改用 stdin 指令约定）；send_sigkill=强杀进程及其全部子孙进程。环形缓冲只保留最近 512KB，更早的输出用 process_tools_check 或直接读日志文件。",
+      "description": "与托管进程交互。action 四选一：write_stdin=写标准输入（应答提示/送代码）；read_stdout=读输出缓冲（增量续读）；send_sigint=中断信号（Windows 下直接终止，优雅退出改用 stdin）；send_sigkill=强杀进程及子孙。",
       "parameters": {
         "properties": {
           "process_id": {

@@ -160,7 +160,12 @@ class Notifier:
         return self._notices.get(key, {}).get(num)
 
     def set_notice(self, key: tuple, notice: Notice) -> None:
-        """登记 Notice 对象（不挂监听不启动周期任务，用于恢复/补记场景）。"""
+        """登记 Notice 对象（不挂监听不启动周期任务，用于恢复/补记场景）。
+
+        ⚠️ list 通知标记按 interval_active() 显示（0.6.9）：经此登记
+        带 interval≥30 的记录会显示「🔔周期Ns」标记但无实际周期任务
+        ——恢复/补记方需自行保证周期任务就绪（当前全仓无调用点）。
+        """
         self._notices.setdefault(key, {})[notice.process_num] = notice
 
     def cancel(self, key: tuple, num: int) -> int:

@@ -4,22 +4,25 @@
 
 ---
 
-## 当前状态速览（2026-10-17）
+## 当前状态速览
 
-- **版本**：v0.6.8（exec cwd 语义对齐内核 `get_tool_base_dir`：空串默认值走 project dir→workspace→WORKING_DIR 三级回落；相对路径修 bug——旧 `os.path.abspath` 实际挂宿主进程启动目录、与文档不符，新挂第一个项目目录；resolve 丢 to_thread 防断连网络盘卡事件循环；get_data_dir 等内部状态保持 get_workspace_dir 不动；plugin.json qwenpaw_version min 2.2.0/max 2.9.0 由作者手改；2026-10-17 已双树提交，重启生效，实机冒烟 3/3 PASS：默认 cwd→workspace、相对 cwd="tools"→{workspace}\tools（宿主 cwd bug 修复实锤）、~→C:\Users\<user>）。0.6.7：输出分隔线家族统一（check/wait 标签、read_stdout 净化输出标签、notifier 完成通知/周期通知文本融合式分隔线，已装机同步）。0.6.6：exec 前台返回新增输出分隔线 `————以下为stdout/stderr输出————`。0.6.5：notice 新增 `cancel` 参数（取消注册 + 撤回聚合缓存待发通知；swap-and-clear 无锁聚合器 + 三道闸；`read_log_tail` 修 TOCTOU）。0.6.4：meta.tools 逐条补 `category: "runtime"` + 插件更名「QwenPaw增强多进程工具」。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`。历史：0.4.4 → 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失 → 0.6.0 会话聚合器（双链路实机闭环）→ 0.6.1 notice 批量 → 0.6.2 meta.tools → 0.6.3 转义+标记 → 0.6.4 category+更名 → 0.6.5 notice cancel → 0.6.6 exec 分隔线 → 0.6.7 分隔线家族统一。
-- **测试**：**202 passed + 4 skipped**（skip 全为平台守卫；含 0.6.5 cancel 8 项 + TOCTOU 1 项 + 0.6.6/0.6.7 分隔线断言 7 处 + 0.6.8 cwd 对齐 11 项）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
-- **装机**：git 工作树方式（`~/.qwenpaw/plugins/qwenpaw-plugin-process-tools`，`run` 分支）。**0.6.1 已装机实机冒烟通过**（2026-09-12）：混合批次三段式逐字命中 / 一行枚举+周期模式+JSON 字符串+幂等更新 / 全失败 error / 空列表参数错 / killed 聚合 ×2 通知 E2E（气泡+唤醒单回合，忙等时序正确）。
+- **版本**：v0.6.9（list 通知注册标记：running 进程状态方括号内 🔔 标记——`[running 🔔周期900s+完成通知]`/`[running 🔔完成通知]`，作者定稿周期注册两个都显示、header 不加计数；已结束进程注册记录残留于 _notices 需 list 侧按状态过滤，cancel 后天然不显示；`summary_line(state_tag="")` 加可选参数、manager 不 import notifier 分层不破坏；`set_notice` docstring 补隐式不变量标注；check/wait 不加标记（作者拍板：🔔 只属 list 视图）；**三路无上下文对抗复审 A/B/C 后修复**：test mock 补 self 参（类属性挂载休眠地雷）、tools_schema.json 按最终 docstring 重生成（生成产物历史惯例每版同步）、断言位置化、补混合状态/恒等 2 用例；新增 tests/test_list_notice_tag.py 7 用例，全量 210 passed + 3 skipped——旧集合 1 条 importorskip 环境守卫转 passed 总数守恒；**2026-11-16 docstring 精简**：6 工具全砍 50-66%（exec/check/wait/communicate/list），子 agent 模糊请求盲测零试错通过）。0.6.8（exec cwd 语义对齐内核 `get_tool_base_dir`：空串默认值走 project dir→workspace→WORKING_DIR 三级回落；相对路径修 bug——旧 `os.path.abspath` 实际挂宿主进程启动目录、与文档不符，新挂第一个项目目录；resolve 丢 to_thread 防断连网络盘卡事件循环；get_data_dir 等内部状态保持 get_workspace_dir 不动；plugin.json qwenpaw_version min 2.2.0/max 2.9.0 由作者手改；2026-10-17 已双树提交，重启生效，实机冒烟 3/3 PASS：默认 cwd→workspace、相对 cwd="tools"→{workspace}\tools（宿主 cwd bug 修复实锤）、~→C:\Users\<user>）。0.6.7：输出分隔线家族统一（check/wait 标签、read_stdout 净化输出标签、notifier 完成通知/周期通知文本融合式分隔线，已装机同步）。0.6.6：exec 前台返回新增输出分隔线 `————以下为stdout/stderr输出————`。0.6.5：notice 新增 `cancel` 参数（取消注册 + 撤回聚合缓存待发通知；swap-and-clear 无锁聚合器 + 三道闸；`read_log_tail` 修 TOCTOU）。0.6.4：meta.tools 逐条补 `category: "runtime"` + 插件更名「QwenPaw增强多进程工具」。0.6.3：命令/name 控制字符转义显示 `escape_ctrl` + 截断标记统一 `<<<TRUNCATED>>>`。历史：0.4.4 → 0.5.0 信使装机成功（prefix 踩坑后合并 router）→ 0.5.1 会话门闩修并发丢失 → 0.6.0 会话聚合器（双链路实机闭环）→ 0.6.1 notice 批量 → 0.6.2 meta.tools → 0.6.3 转义+标记 → 0.6.4 category+更名 → 0.6.5 notice cancel → 0.6.6 exec 分隔线 → 0.6.7 分隔线家族统一。
+- **测试**：**210 passed + 3 skipped**（skip 全为平台守卫/importorskip；含 0.6.5 cancel 8 项 + TOCTOU 1 项 + 0.6.6/0.6.7 分隔线断言 7 处 + 0.6.8 cwd 对齐 11 项 + 0.6.9 list 通知标记 7 项）；必须用 `D:\Software\miniconda3\envs\qwenpaw\python.exe` 跑（系统 python 缺 agentscope）。
+- **装机**：zip 热装方式（`git ls-files -z` 导出**无顶层目录** zip → `qwenpaw plugin install <zip> --force`，2026-11-16 切换，替代旧 git 工作树方式）。0.6.9 已装机 e2e 验证通过（🔔 标记 + 周期通知 + 完成通知全链路正常）。
 - **两轮零上下文子 Agent 复查均通过**（第二轮 A–H 八项 + 双解析器 18+15 用例实测零缺陷）。
 
 ---
 
 ## 装机与更新流程（重要）
 
-- **git 工作树方式安装**：装机目录就是工作树，**严禁 `qwenpaw plugin install`**（破坏工作树）。
-- 更新流程 = 同步代码文件进工作树 → **作者重启 QwenPaw**（助手不能重启宿主）。单纯覆盖文件**不触发重载**（sys.modules 缓存）——实测踩过：复制 utils.py 后复测仍旧行为。
-- plugin.json/文档允许暂时与代码不同步（只同步 py 即可先验证行为）。
-- **同步纪律（2026-10-15 教训）**：更新要同步**全部变更文件**（py + plugin.json + CHANGELOG/MEMORY 都要），只同步部分会留旧版残留——0.6.2 修复时 CHANGELOG/MEMORY 漏同步，隐私扫描在装机目录抓到残留称呼。
-- `qwenpaw plugin install <URL>` 仅支持 zip 归档，Git 仓库需 clone 后本地路径安装（QwenPaw 安装器行为）。
+- **zip 热装方式（2026-11-16 切换，替代旧 git 工作树方式）**：
+  - 打包：`git ls-files -z` 导出**无顶层目录** zip（plugin.json 在 zip 根，arcname = git 相对路径）
+  - 安装：`qwenpaw plugin install <zip> --force`（QwenPaw 运行时经 API 立即生效，无需重启）
+  - 未 commit 变更需手动追加到打包列表（git ls-files 只含已跟踪文件）
+  - 装机目录变干净拷贝（.git 消失），不再做 git 操作
+- **⚠️ DEPENDENCY_ORIGIN_INVALID 根因（2026-11-16 实测）**：手动同步文件到装机目录（如 plugin.json version 变化）导致磁盘与宿主内存注册快照不一致 → QwenPaw 2.3.0b2 热装 reload 路径 `_read_source_identity` manifest 比对拒绝。**规则：不再手动同步文件到装机目录，一律走 zip 热装**。重启 QwenPaw 可临时解决（内存快照从磁盘重建）。
+- **⚠️ 热加载不刷新已运行会话**：热装替换宿主模块，但当前会话工具绑定是启动时快照——改完工具行为后当前会话调工具仍返回旧结果，需新开会话（或重启）才用上新版。
+- 历史：0.4.4-0.6.8 为 git 工作树方式（装机目录是工作树，严禁 qwenpaw plugin install）；0.6.9 起切换 zip 热装。
 
 ---
 
@@ -52,6 +55,7 @@
 10. **PYTHONUTF8 坑**：`locale.getpreferredencoding` 会谎报 utf-8；auto 编码必须用 `GetConsoleOutputCP()`（936→gbk）。
 11. **通道双层 JSON 编码**（实链路实测）：工具参数会被通道字符串化成「外围引号+内部转义引号」双层（如 `"[\"35\", \"36\"]"`）——parse_process_ids/parse_env 均以**逐层 json.loads（最多 2 次）+ 病态变体受限兜底**（剥一次仅当剥完能解出目标类型才接受）处理；`""5""` 双层引号仍拒绝。
 12. 已接受不修：半条 OSC/CSI 跨行残留裸 ESC；shutdown 最后一批 exit-listener 投递可能被取消；后台进程永不超时（timeout=0 前台真等，靠 description 提醒）；exec 超时错误分支不带 shell/encoding 行（聚焦超时本身）。
+13. **`start` 拉常驻程序前台假超时（2026-11-02 auto_run 实测）**：`cmd /c 'start "" charmap.exe'` 前台必超时——charmap 继承 stdout 管道句柄不放手，`_read_loop` 等 EOF 等不到，`_monitor` 永不完成 → 前台 timeout 杀进程树（纯显示假象，charmap 本身正常）。对照实验：`ping -t` 继承管道同样超时；子进程三管道全 DEVNULL 则父进程退出即返回。**调用方加固**：拉起常驻程序的 Popen 加 `stdout/stderr/stdin=DEVNULL`（不继承句柄）；pythonw 无管道宿主天然免疫。
 
 ---
 
