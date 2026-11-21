@@ -2,7 +2,9 @@
 """process_tools_exec — 启动托管 shell 进程（前台等待 / 后台运行）。"""
 
 import asyncio
+import json
 import logging
+import os
 import time
 from typing import Optional, Union
 
@@ -13,13 +15,16 @@ try:
         get_tool_base_dir,
         make_error,
         make_success,
+        mojibake_hint,
         parse_argv,
         parse_env,
         parse_int,
+        ps_quote_call_fix,
         resolve_cwd,
         resolve_encoding,
         resolve_shell_argv,
         truncate_line,
+        windows_utf8_prefix,
     )
 except ImportError:  # 兼容 pytest 直接以项目根导入
     from manager import get_manager
@@ -28,13 +33,16 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
         get_tool_base_dir,
         make_error,
         make_success,
+        mojibake_hint,
         parse_argv,
         parse_env,
         parse_int,
+        ps_quote_call_fix,
         resolve_cwd,
         resolve_encoding,
         resolve_shell_argv,
         truncate_line,
+        windows_utf8_prefix,
     )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +61,7 @@ async def process_tools_exec(
     hide_window: bool = False,
     detach: bool = False,
     encoding: str = "auto",
+    patch_win_py_utf8: bool = False,
     no_shell: bool = False,
     shell: str = "auto",
 ):
@@ -69,12 +78,34 @@ async def process_tools_exec(
         hide_window: Windows 下隐藏子进程的控制台窗口（CREATE_NO_WINDOW），跑不该弹窗的脚本时用；POSIX 忽略，与 detach=True 无叠加意义。
         detach: True 时启动完全不受本插件控制的脱离进程：立即返回 OS 级 PID（不是 #N 编号），无 stdin/stdout/stderr 管道（输出丢弃，需要就自己在 command 里重定向）、无超时、不进注册表（list/check/communicate/notice 都看不到它）、宿主退出不被清理、不占名额。之后管理需用系统命令按 PID 自理（Windows taskkill /F /T /PID、POSIX kill；注意 PID 是 shell 进程，杀整树要 /T）。background/timeout/max_output_chars/encoding 参数失效。
         encoding: 管道编解码 codec（输出解码与 stdin 编码共用）。auto（默认）=本机原生编码（Windows 取控制台码页，中文系统即 GBK，返回信息会写明实际值）；输出乱码或 stdin 中文失配时显式指定（如 utf-8 / gbk / cp437），未知 codec 会报错。
+        patch_win_py_utf8: 仅在 Windows 有效，其他系统忽略。跑 Python 程序时推荐启用：向子进程注入 PYTHONUTF8=1、把 PowerShell 控制台 IO 编码钉成 UTF-8，并强制按 utf-8 解码（为 true 时忽略 encoding 参数，返回信息会注明）。
         no_shell: True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。注意直启目标本身就是 cmd/sh 类解释器时，它会再解析自己的命令行，元字符免疫只对 argv 传参的真程序（python/git 等）有效。
-        shell: 命令解释器：auto（默认——Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落；旧值 default 等同 auto）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。显式选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。
+        shell: 命令解释器：auto（默认——Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落；旧值 default 等同 auto）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash / cmd（Windows 原生 cmd.exe /c，仅 Windows：cmd 内建命令与 %VAR% 展开原样可用，引号路径直接写、不需要 & 调用符）。显式选定的 shell 不适用或找不到时报错引导，不静默换壳。no_shell=True 时忽略。PowerShell 下以引号开头的 exe 路径会自动补 `&` 调用运算符，$var 是 PS 插值语法。
     """
+    # ── Windows Python UTF-8 补丁（非 Windows 忽略）──
+    patch_utf8 = bool(patch_win_py_utf8) and os.name == "nt"
+    if patch_utf8:
+        enc_name = "utf-8"
+        enc_note = (
+            'stdin/stdout/stderr encoding="utf-8" '
+            "(patch_win_py_utf8=true：已强制 UTF-8，encoding 参数被忽略)"
+        )
+    else:
+        enc_name, enc_auto, enc_err = resolve_encoding(encoding)
+        if enc_err:
+            return make_error("启动进程", enc_err)
+        if enc_auto:
+            enc_note = (
+                f'stdin/stdout/stderr encoding="{enc_name}" '
+                '(auto=本机编码；若输出很多 "??" 或 乱码请显式调整 encoding，如 utf-8)'
+            )
+        else:
+            enc_note = f'stdin/stdout/stderr encoding="{enc_name}"'
+
     # ── 参数规范化 ──
     display_command = ""
     shell_used: Optional[str] = None
+    prefix: Optional[list] = None  # no_shell 分支不赋值，shell_line 段会读
     if no_shell:
         argv, argv_err = parse_argv(command)
         if argv_err:
@@ -89,26 +120,60 @@ async def process_tools_exec(
         if not command or not str(command).strip():
             return make_error("启动进程", "command 为空", "请提供要执行的命令")
         display_command = str(command)
+        # 通道会把 list 参数 JSON 字符串化（schema 声明 command 是 string）：
+        # 用户传 ["echo","x"] 时这里收到 '["echo","x"]'，直接喂 shell 只会报
+        # 莫名其妙的语法错（PowerShell: “[”后缺少类型名称）。识别出来给正确用法。
+        if display_command.lstrip().startswith("["):
+            try:
+                parsed = json.loads(display_command)
+            except ValueError:
+                parsed = None
+            if (
+                isinstance(parsed, list)
+                and parsed
+                and all(isinstance(x, str) for x in parsed)
+            ):
+                return make_error(
+                    "启动进程",
+                    "command 收到 argv 列表形态（列表或其 JSON 字符串）",
+                    "传 argv 列表需同时设 no_shell=True；或改传普通命令字符串",
+                )
         # shell 枚举：auto→按平台可用性选壳，包装成 argv 直启
         # （不经 create_subprocess_shell 的系统默认壳）
         prefix, shell_used, shell_err = resolve_shell_argv(shell)
         if shell_err:
             return make_error("启动进程", shell_err)
-        spawn_target = [*prefix, str(command)]
+        if shell_used == "cmd":
+            # cmd 的 /c 引号规则：命令以引号开头且引号多于两个时，会把首尾各
+            # 剥掉一个（旧行为）——`"C:\a b\x.exe" -c "print(1)"` 会被拆坏。
+            # 而 argv 形式还会叠一层 list2cmdline 的 `\"` 转义，cmd 不认。
+            # 故交原始命令行给 create_subprocess_shell：Windows 上它拼成
+            # `COMSPEC /c "<命令>"`，外层引号被剥离后正好还原用户原文。
+            spawn_target = str(command)
+        else:
+            utf8_prefix = windows_utf8_prefix(shell_used) if patch_utf8 else ""
+            # 引号开头的路径命令：PowerShell 会当字符串表达式解析（后跟参数即
+            # ParserError），补 `&` 调用运算符；cmd/bash 与其他写法不动。
+            shell_command = ps_quote_call_fix(str(command), shell_used)
+            spawn_target = [*prefix, utf8_prefix + shell_command]
     shell_line = f'shell="{shell_used}"\n' if shell_used else ""
-
-    enc_name, enc_auto, enc_err = resolve_encoding(encoding)
-    if enc_err:
-        return make_error("启动进程", enc_err)
-    if enc_auto:
-        enc_note = (
-            f'stdin/stdout/stderr encoding="{enc_name}" '
-            '(auto=本机编码；若输出很多 "??" 或 乱码请显式调整 encoding，如 utf-8)'
+    # Windows 上 bash 常解析到 System32\bash.exe（WSL 启动器）：实测它会把
+    # `$变量` 与引号提前吞掉（`X=42; echo "VAR-$X"` 输出 VAR-，exit=0），
+    # 属静默错果——这里必须显式提示，不能让人当正常结果用。
+    bash_exe = str(prefix[0]) if prefix else ""
+    if (
+        os.name == "nt"
+        and shell_used == "bash"
+        and "system32" in bash_exe.lower()
+    ):
+        shell_line += (
+            "⚠️ Windows 的 bash 解析到 WSL 启动器（System32\\bash.exe）："
+            "$变量与引号可能被提前吞掉（实测 `X=42; echo $X` 输出空值）。"
+            "要可靠脚本请用 no_shell 原生直启，或改用 pwsh / cmd。\n"
         )
-    else:
-        enc_note = f'stdin/stdout/stderr encoding="{enc_name}"'
 
     clean_env, env_err = parse_env(env)
+
     if env_err:
         return make_error("启动进程", env_err)
 
@@ -135,6 +200,7 @@ async def process_tools_exec(
         try:
             pid = await asyncio.to_thread(
                 manager.spawn_detached, spawn_target, resolved_cwd, clean_env,
+                patch_utf8,
             )
         except RuntimeError as e:
             return make_error("启动进程", str(e))
@@ -161,9 +227,22 @@ async def process_tools_exec(
             env=clean_env,
             hide_window=hide_window,
             encoding=enc_name,
+            python_utf8=patch_utf8,
             display=display_command,
         )
     except RuntimeError as e:
+        # 典型场景：no_shell 传了内建命令（echo）或路径写错。manager 把
+        # 启动异常统一包成 RuntimeError，原始类型在 __cause__ 里——点出是
+        # 哪个可执行文件找不到，比裸 [WinError 2] 有用。
+        cause = getattr(e, "__cause__", None)
+        if (
+            isinstance(cause, FileNotFoundError)
+            and isinstance(spawn_target, list)
+            and spawn_target
+        ):
+            return make_error(
+                "启动进程", f"找不到可执行文件「{spawn_target[0]}」", str(e),
+            )
         return make_error("启动进程", str(e))
     except OSError as e:
         # Windows 坏 cwd 抛 NotADirectoryError（与 FileNotFoundError 是兄弟，
@@ -205,9 +284,12 @@ async def process_tools_exec(
         note = await mp.kill()
         lines, _size = mp.get_log_tail(20)
         tail = "\n".join(lines) if lines else "（无输出）"
+        hint = mojibake_hint(tail)
         return make_error(
             "命令执行",
-            f"等待 {timeout} 秒超时，进程已被终止（{note}）。输出末尾 20 行：\n{tail}",
+            f"等待 {timeout} 秒超时，进程已被终止（{note}）。"
+            + (f"\n{hint}" if hint else "")
+            + f"\n输出末尾 20 行：\n{tail}",
             "如果是长时间任务，可加大 timeout 或改用 background=True 后台运行；"
             f"完整日志：{mp.log_path}",
         )
@@ -215,12 +297,14 @@ async def process_tools_exec(
     elapsed = time.time() - start_ts
     mins, secs = divmod(int(elapsed), 60)
     output = mp.get_log_text()
+    hint = mojibake_hint(output)
     label = f"「{escape_ctrl(mp.name)}」" if mp.name else ""
     header = (
         f"进程 #{mp.num}{label} 结束（exit={mp.exit_code}，用时 {mins}m{secs:02d}s）\n"
         f"命令：{escape_ctrl(truncate_line(mp.command, 120))}\n"
         f"{shell_line}"
         f"{enc_note}"
+        + (f"\n{hint}" if hint else "")
     )
     if len(output) > mo_chars:
         return make_success(
@@ -235,3 +319,5 @@ async def process_tools_exec(
         else f"{header}\n（无输出）"
     )
     return make_success(text)
+
+

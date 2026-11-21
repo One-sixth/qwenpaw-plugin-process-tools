@@ -306,3 +306,34 @@ def test_get_tool_base_dir_passthrough_when_kernel_available():
     got = utils_mod.get_tool_base_dir()
     assert isinstance(got, str)
     assert got == "" or os.path.isabs(got)
+
+
+# ── shell 枚举解析：cmd 分支（0.7.1）─────────────────────
+
+
+def test_resolve_shell_cmd_on_windows():
+    """Windows 上 cmd → [cmd.exe 绝对路径, "/c"]，shell 名 "cmd"。"""
+    from utils import resolve_shell_argv
+
+    argv, name, err = resolve_shell_argv("cmd")
+    if os.name != "nt":
+        assert argv is None and name is None
+        assert "Windows" in err
+        return
+    assert err is None and name == "cmd"
+    assert argv[-1] == "/c"
+    assert "cmd" in argv[0].lower()
+
+
+def test_resolve_shell_cmd_not_hijacked_by_pwsh():
+    """显式 cmd 不许被 pwsh 抢走（分支顺序回归）。"""
+    from utils import resolve_shell_argv
+
+    argv, name, _err = resolve_shell_argv("cmd")
+    if os.name != "nt" or argv is None:
+        import pytest
+
+        pytest.skip("仅 Windows 且 cmd 可用")
+    assert name == "cmd"
+    assert "pwsh" not in " ".join(argv).lower()
+    assert "powershell" not in " ".join(argv).lower()

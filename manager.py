@@ -91,13 +91,19 @@ def status_for_exit(exit_code, killed_by_us: bool) -> str:
     return STATUS_FAILED
 
 
-def build_subprocess_env(extra: Optional[dict] = None) -> dict:
+def build_subprocess_env(
+    extra: Optional[dict] = None, python_utf8: bool = False,
+) -> dict:
     """子进程环境：宿主 os.environ ⊕ 用户 env ⊕ PATH 前置宿主 python 目录。
 
     对齐框架 execute_shell_command 惯例（shell.py 入口）：增量叠加、永不
     全量替换；PATH 前置 sys.executable 所在目录使子进程 `python`/`pip`
     命中框架所在环境；Windows 下 PATH 键名大小写变体（Path/path）做
     不敏感归并，避免同键双份。
+
+    python_utf8=True 且 Windows 时补 PYTHONUTF8=1（只补不盖，用户显式
+    传的 PYTHONUTF8 优先；不改宿主 os.environ）——让子进程 Python 的
+    stdio 走 UTF-8，与工具侧默认解码 codec 对齐。POSIX 无需（本就是）。
     """
     env = dict(os.environ)
     if extra:
@@ -107,6 +113,9 @@ def build_subprocess_env(extra: Optional[dict] = None) -> dict:
             if host_key is not None and host_key != k:
                 env.pop(host_key)  # 用户用变体键覆盖时先摘掉宿主那份
             env[k] = v
+    if python_utf8 and os.name == "nt":
+        if not any(k.upper() == "PYTHONUTF8" for k in env):
+            env["PYTHONUTF8"] = "1"
     bin_dir = os.path.dirname(sys.executable)
     path_key = next((k for k in env if k.upper() == "PATH"), "PATH")
     cur = env.get(path_key, "")
@@ -129,6 +138,7 @@ class ManagedProcess:
         hide_window: bool = False,
         encoding: str = "utf-8",
         display: str = "",
+        python_utf8: bool = False,
     ) -> None:
         self.num = num  # 会话内编号 #N
         # command 双形态：str=shell 命令行；list=argv 原生直启（no_shell）
@@ -145,6 +155,7 @@ class ManagedProcess:
         self.log_path = log_path
         self.name = (name or "").strip()[:80]  # 人肉标签（展示用）
         self.encoding = encoding or "utf-8"  # 管道编解码 codec（auto 已由工具层解析）
+        self.python_utf8 = bool(python_utf8)  # Windows：子进程注 PYTHONUTF8=1
         self._env = env or None  # 增量环境变量（spawn 时并入 os.environ）
         self._hide_window = bool(hide_window)  # Windows：压掉子进程控制台窗口
         self.started_at = time.time()
@@ -180,7 +191,9 @@ class ManagedProcess:
             stderr=asyncio.subprocess.STDOUT,
         )
         # 对齐框架惯例：始终并入宿主环境 + PATH 前置宿主 python 目录
-        kwargs["env"] = build_subprocess_env(self._env)
+        kwargs["env"] = build_subprocess_env(
+            self._env, python_utf8=self.python_utf8,
+        )
         if os.name == "posix":
             kwargs["start_new_session"] = True
         else:
@@ -378,9 +391,9 @@ class ManagedProcess:
                 os.kill(pid, _ctrl_break_event())
                 return (
                     f"已向进程组 {pid} 发送 CTRL_BREAK"
-                    "（Windows 实测：不经 CPython 信号机制，"
-                    "handler 不会执行，进程以 0xC000013A 被 OS 终止，"
-                    "≈ 略轻于 sigkill 的第二档硬杀；优雅退出请走 stdin 指令）"
+                    "（Windows 下不保证送达：shell 包装的命令"
+                    "（pwsh -Command / cmd /c）常收不到，已结束与否见下方实测；"
+                    "要确定终止请用 send_sigkill；优雅退出请走 stdin 指令）"
                 )
         except ProcessLookupError:
             return "目标进程已不存在（可能刚刚退出）"
@@ -620,6 +633,7 @@ class ProcessManager:
         hide_window: bool = False,
         encoding: str = "utf-8",
         display: str = "",
+        python_utf8: bool = False,
     ) -> ManagedProcess:
         """在当前会话注册表启动一个托管进程。
 
@@ -641,7 +655,7 @@ class ProcessManager:
         mp = ManagedProcess(
             num, command, key, cwd, log_path,
             name=name, env=env, hide_window=hide_window, encoding=encoding,
-            display=display,
+            display=display, python_utf8=python_utf8,
         )
         try:
             await mp.start()
@@ -658,6 +672,7 @@ class ProcessManager:
         command: Union[str, list],
         cwd: str = "",
         env: Optional[dict] = None,
+        python_utf8: bool = False,
     ) -> int:
         """启动完全脱离托管的进程（detach 模式），返回 OS 级 PID。
 
@@ -682,7 +697,7 @@ class ProcessManager:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            env=build_subprocess_env(env),
+            env=build_subprocess_env(env, python_utf8=python_utf8),
         )
         if os.name == "posix":
             # 新会话：脱离宿主进程组，免疫宿主终端的 SIGHUP/整组信号

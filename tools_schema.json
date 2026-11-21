@@ -64,6 +64,11 @@
             "description": "管道编解码 codec（输出解码与 stdin 编码共用）。auto（默认）=本机原生编码（Windows 取控制台码页，中文系统即 GBK，返回信息会写明实际值）；输出乱码或 stdin 中文失配时显式指定（如 utf-8 / gbk / cp437），未知 codec 会报错。",
             "type": "string"
           },
+          "patch_win_py_utf8": {
+            "default": false,
+            "description": "仅在 Windows 有效，其他系统忽略。跑 Python 程序时推荐启用：向子进程注入 PYTHONUTF8=1、把 PowerShell 控制台 IO 编码钉成 UTF-8，并强制按 utf-8 解码（为 true 时忽略 encoding 参数，返回信息会注明）。",
+            "type": "boolean"
+          },
           "no_shell": {
             "default": false,
             "description": "True=不经 shell 的原生直启（create_subprocess_exec），command 必须传 argv 列表；无重定向/管道/&&/通配符等 shell 语义（想要就得自己套一层 shell 命令），换来零引号地狱与元字符误伤。注意直启目标本身就是 cmd/sh 类解释器时，它会再解析自己的命令行，元字符免疫只对 argv 传参的真程序（python/git 等）有效。",
@@ -71,7 +76,7 @@
           },
           "shell": {
             "default": "auto",
-            "description": "命令解释器：auto（默认——Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落；旧值 default 等同 auto）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash。显式选定的 shell 找不到时报错引导，不静默换壳。no_shell=True 时忽略。注意 PowerShell 下带引号的 exe 路径需 `& ` 调用运算符前缀（如 & \"C:\\Program Files\\x.exe\"），且 $var 是 PS 插值语法。",
+            "description": "命令解释器：auto（默认——Windows pwsh > powershell > cmd、Linux bash > sh、macOS zsh > bash > sh，按可用性自动回落；旧值 default 等同 auto）/ pwsh（PowerShell 语法，Windows PowerShell 5.1 兜底）/ bash / cmd（Windows 原生 cmd.exe /c，仅 Windows：cmd 内建命令与 %VAR% 展开原样可用，引号路径直接写、不需要 & 调用符）。显式选定的 shell 不适用或找不到时报错引导，不静默换壳。no_shell=True 时忽略。PowerShell 下以引号开头的 exe 路径会自动补 `&` 调用运算符，$var 是 PS 插值语法。",
             "type": "string"
           }
         },
@@ -154,7 +159,7 @@
     "type": "function",
     "function": {
       "name": "process_tools_communicate",
-      "description": "与托管进程交互。action 四选一：write_stdin=写标准输入（应答提示/送代码）；read_stdout=读输出缓冲（增量续读）；send_sigint=中断信号（Windows 下直接终止，优雅退出改用 stdin）；send_sigkill=强杀进程及子孙。",
+      "description": "与托管进程交互。action 四选一：write_stdin=写标准输入（应答提示/送代码）；read_stdout=读输出缓冲（增量续读）；send_sigint=发送中断（Windows 送 CTRL_BREAK，对 shell 包装的命令常无效，以返回里的「实测」行为准；要确定终止用 send_sigkill）；send_sigkill=强杀进程及子孙。",
       "parameters": {
         "properties": {
           "process_id": {

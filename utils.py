@@ -471,18 +471,27 @@ def resolve_encoding(value) -> Tuple[str, bool, Optional[str]]:
 
     auto/空 = 本机原生编码：Windows 取控制台输出码页（GetConsoleOutputCP，
     中文系统 936→gbk——不能用 locale.getpreferredencoding，宿主常设
-    PYTHONUTF8=1 会让它谎报 utf-8，而 cmd 原生输出仍是 GBK）；POSIX 取
+    PYTHONUTF8=1 会谎报 utf-8，而 cmd 原生输出仍是 GBK）；POSIX 取
     locale 首选编码。显式值经 codecs.lookup 校验并取规范名。
+    `local` 是 auto 的旧名，已在 0.7.1 移除（两者同义，留两个只会混乱）。
     """
     s = str(value or "").strip().lower()
     if s in ("", "auto"):
         return _auto_codec(), True, None
+    if s == "local":
+        return "", False, (
+            'encoding="local" 已移除；本机编码就是默认值 auto，'
+            "省略该参数即可"
+        )
     import codecs
 
     try:
         return codecs.lookup(s).name, False, None
     except LookupError:
-        return "", False, f"未知 encoding「{value}」，可用值如 auto / utf-8 / gbk / cp936 / latin-1"
+        return "", False, (
+            f"未知 encoding「{value}」，"
+            "可用值如 auto / utf-8 / gbk / cp936 / latin-1"
+        )
 
 
 def _auto_codec() -> str:
@@ -511,6 +520,9 @@ def _auto_codec() -> str:
         except LookupError:
             continue
     return "utf-8"
+
+    return "utf-8"
+
 
 
 def parse_argv(value) -> Tuple[Optional[list], Optional[str]]:
@@ -596,7 +608,7 @@ def parse_process_ids(value) -> Tuple[Optional[list], Optional[str]]:
 
 # ── shell 选择 ──────────────────────────────────────────
 
-SHELL_CHOICES = ("auto", "pwsh", "bash")
+SHELL_CHOICES = ("auto", "pwsh", "bash", "cmd")
 
 _PWSH_FLAGS = ["-NoProfile", "-NonInteractive", "-Command"]
 
@@ -605,8 +617,8 @@ def resolve_shell_argv(spec: str) -> Tuple[Optional[list], Optional[str], Option
     """shell 参数 → (argv 前缀, 实际使用的 shell 名, 错误消息)。
 
     auto：Windows pwsh > powershell > cmd.exe；Linux bash > /bin/sh；
-    macOS zsh > bash > /bin/sh。显式选 pwsh/bash 但找不到 → 报错
-    引导改用 auto，不静默换壳。旧值 "default" 等同 auto（升级兼容别名）。
+    macOS zsh > bash > /bin/sh。显式选 pwsh/bash/cmd 但不适用或找不到 →
+    报错引导改用 auto，不静默换壳。旧值 "default" 等同 auto（升级兼容别名）。
     """
     import shutil
     import sys
@@ -618,6 +630,9 @@ def resolve_shell_argv(spec: str) -> Tuple[Optional[list], Optional[str], Option
     if spec not in SHELL_CHOICES:
         return None, None, f"shell 参数应为 {' / '.join(SHELL_CHOICES)}，收到「{spec}」"
     if os.name == "posix":
+        if spec == "cmd":
+            # cmd.exe 是 Windows 原生壳，POSIX 没有等价物（不拿 wine 之类凑）
+            return None, None, 'cmd 仅 Windows 可用，可改 shell="auto"(bash)'
         if spec == "pwsh":
             exe = shutil.which("pwsh") or shutil.which("powershell")
             if not exe:
@@ -640,6 +655,10 @@ def resolve_shell_argv(spec: str) -> Tuple[Optional[list], Optional[str], Option
         if not bash:
             return None, None, '未找到 bash（Git Bash?），可改 shell="auto"(pwsh)'
         return [bash, "-c"], "bash", None
+    if spec == "cmd":
+        # cmd 是 Windows 原生壳：%ComSpec% 恒指向 cmd.exe；极端环境退回裸名让系统解析
+        cmd_exe = os.environ.get("ComSpec") or shutil.which("cmd.exe") or "cmd.exe"
+        return [cmd_exe, "/c"], "cmd", None
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     if spec == "pwsh":
         if not pwsh:
@@ -649,6 +668,140 @@ def resolve_shell_argv(spec: str) -> Tuple[Optional[list], Optional[str], Option
         return [pwsh, *_PWSH_FLAGS], "pwsh", None
     cmd = shutil.which("cmd.exe") or "cmd.exe"
     return [cmd, "/c"], "cmd", None
+# ── Windows UTF-8 预热 ──────────────────────────────────
+# ── Windows Python UTF-8 补丁 ─────────────────────────────
+
+# 只钉 PowerShell 控制台 IO 编码：$OutputEncoding 管「喂给原生命令的输入」，
+# [Console]::InputEncoding/OutputEncoding 管本进程读控制台与写 stdout 的
+# 字节编码。设 [Console]::OutputEncoding 会连带 SetConsoleOutputCP，所以
+# 不需要额外的 chcp（Python 的管道输出由 PYTHONUTF8 决定，与码页无关）。
+_PS_UTF8_INIT = (
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+    "[Console]::InputEncoding=[Text.Encoding]::UTF8;"
+    "$OutputEncoding=[Console]::OutputEncoding"
+)
+
+
+def windows_utf8_prefix(shell_name: Optional[str]) -> str:
+    r"""Python UTF-8 补丁的 shell 前缀（非 Windows / 非 PowerShell 返回空串）。
+
+    挂在用户命令前面一并交给 shell，保证 PowerShell 不会按 ANSI 码页把
+    子进程输出的 UTF-8 字节反解成替换符。cmd 壳无需前缀（内建命令随码页，
+    跑 Python 时码页无关）。
+    """
+    if os.name != "nt" or shell_name not in ("pwsh", "powershell"):
+        return ""
+    return _PS_UTF8_INIT + "; "
+
+# ── PowerShell 调用运算符补丁 ─────────────────────────────
+#
+# PowerShell 里 `"C:\a b\tool.exe" -x` 的第一段是**字符串表达式**，紧跟的
+# `-x` 不是合法运算符 → ParserError（表达式或语句中存在意外的标记）。补上
+# `&` 调用运算符才能当命令执行。只在「引号开头 + 后面还跟参数」时补：
+# 纯字面量、管道/重定向、字符串比较等本来就合法的写法一字不动。
+
+# 引号字符串后面跟这些词是 PowerShell 运算符（合法语法），不算参数
+_PS_STRING_OPERATORS = frozenset(
+    """-eq -ne -gt -lt -ge -le -like -notlike -match -notmatch -contains
+    -notcontains -in -notin -replace -split -join -is -isnot -as -and -or
+    -xor -not -f -band -bor -bxor -bnot -shl -shr -ceq -cne -cgt -clt
+    -cge -cle -clike -cnotlike -cmatch -cnotmatch -ccontains -cin -creplace
+    -csplit -ieq -ine -igt -ilt -ige -ile -ilike -inotlike -imatch
+    -inotmatch -icontains -iin -ireplace -isplit""".split()
+)
+
+# 引号后紧跟这些字符是合法接续（管道 / 语句分隔 / 重定向 / 括号收尾 / 注释）
+_PS_STMT_SEPARATORS = "|;,)}>#"
+
+# 判「引号里是程序路径」用：含分隔符，或以这些扩展名结尾
+_PS_PROGRAM_HINTS = (
+    ".exe", ".bat", ".cmd", ".com", ".ps1", ".py", ".sh",
+)
+
+
+def _looks_like_program(inner: str) -> bool:
+    """引号内文本像不像一个可执行文件路径（决定要不要补 `&`）。
+
+    只认两种形态：含路径分隔符（`\\` 或 `/`）、或以常见程序扩展名结尾。
+    这样 `'A'+'B'`、`"abc" -eq "x"`、`"abc".Length` 这类**字符串表达式**
+    不会被误当成命令。
+    """
+    if "\\" in inner or "/" in inner:
+        return True
+    return inner.strip().lower().endswith(_PS_PROGRAM_HINTS)
+
+
+def _quoted_end(text: str) -> Optional[int]:
+    """text 以引号开头，返回闭合引号下标（未闭合返回 None）。
+
+    PowerShell 同引号连写两次表示字面引号（`''` / `""`），反引号转义下一
+    个字符。
+    """
+    quote = text[0]
+    i = 1
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == quote:
+            if i + 1 < n and text[i + 1] == quote:
+                i += 2  # 转义的同种引号，继续找闭合
+                continue
+            return i
+        if quote == '"' and ch == "`":
+            i += 2  # 反引号吞掉下一个字符
+            continue
+        i += 1
+    return None
+
+
+def ps_quote_call_fix(command: str, shell_name: Optional[str]) -> str:
+    """PowerShell 专用：以引号开头的路径命令自动补 `&` 调用运算符。
+
+    `"C:\\Program Files\\x.exe" -a` 在 PowerShell 里是「字符串表达式 + 意外
+    标记」→ ParserError；补成 `& "..." -a` 才能执行。
+
+    只在「引号里像程序路径（含分隔符/程序扩展名）且后面还跟参数」时补；
+    字符串表达式（`'A'+'B'`、`"abc" -eq "x"`、`"abc"[0]`、`"abc".Length`）、
+    纯字面量、管道/重定向一律原样。非 pwsh/powershell 壳不处理。
+    """
+    if shell_name not in ("pwsh", "powershell") or not command:
+        return command
+    stripped = command.lstrip()
+    if not stripped or stripped[0] not in ('"', "'"):
+        return command
+    end = _quoted_end(stripped)
+    if end is None:
+        return command  # 引号未闭合：交给 PowerShell 自己报错
+    rest = stripped[end + 1:].lstrip()
+    if not rest:
+        return command  # 纯字符串字面量，本来就合法
+    if rest[0] in _PS_STMT_SEPARATORS:
+        return command  # 管道 / 重定向 / 语句分隔 / 注释
+    if rest.split(None, 1)[0].lower() in _PS_STRING_OPERATORS:
+        return command  # 字符串比较 / 匹配等运算符
+    if not _looks_like_program(stripped[1:end]):
+        return command  # 字符串表达式（'A'+'B' / "abc".Length 等），别动
+    indent = command[: len(command) - len(stripped)]
+    return f"{indent}& {stripped}"
+
+
+
+
+MOJIBAKE_HINT = (
+    "（疑似发现乱码：若是 Python 程序，"
+    "推荐使用参数 patch_win_py_utf8=true）"
+)
+
+
+def mojibake_hint(text: str) -> str:
+    """输出含 U+FFFD 替换符时给一行补救建议（不含则返回空串）。
+
+    只在真的解坏了时出现，正常输出零噪声。**仅 Windows 触发**：提示指向的
+    `patch_win_py_utf8` 是 Windows 专属参数，其他系统给了也没用。
+    """
+    if os.name != "nt" or not text or "\ufffd" not in text:
+        return ""
+    return MOJIBAKE_HINT
 
 
 # ── 日志尾部读取 ──────────────────────────────────────────

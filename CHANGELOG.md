@@ -2,6 +2,101 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.7.1] - 2026-11-21
+
+`process_tools_exec` 新增 `patch_win_py_utf8` 开关：跑 Python 时一键走 UTF-8，
+默认维持原有本机编码行为。`encoding="local"` 移除（与 `auto` 同义）。
+
+> 演进说明：0.7.0 曾把默认编码改成 utf-8 并对所有子进程打补丁，实机矩阵
+> 显示副作用大于收益（GBK 文本/`.bat` 被毁、`open()` 默认编码变化、
+> 控制台码页被动漂移、`param()` 块失效）。0.7.1 收敛为「默认老行为 +
+> 显式开关」，0.7.0 的设计未对外发布。
+
+### Changed
+- **`encoding` 默认值恢复 `auto`**：Windows 取控制台输出码页
+  （`GetConsoleOutputCP`，中文系统 936→gbk），POSIX 取 locale——即 0.6.x
+  的老行为。显式 codec 仍按 `codecs.lookup` 校验取规范名。
+- **移除 `encoding="local"`**：与 `auto` 完全同义，留两个只会混乱；
+  显式传会报错并提示「省略该参数即可」。
+
+### Added
+- **`patch_win_py_utf8: bool = False`**：仅 Windows 有效，其他系统忽略；
+  跑 Python 程序时推荐启用。为 true 时：
+  - 子进程 env 补 **`PYTHONUTF8=1`**（只补不盖，用户显式值优先；
+    不改宿主 `os.environ`；detach 同样注入）；
+  - PowerShell 壳把 **`[Console]::OutputEncoding` / `InputEncoding` /
+    `$OutputEncoding` 钉成 UTF-8**（挂在命令前，静默失败）；
+  - 工具侧**强制按 utf-8 解码并忽略 `encoding` 参数**，返回信息注明
+    `(patch_win_py_utf8=true：已强制 UTF-8，encoding 参数被忽略)`。
+- **`shell="cmd"` 新增（仅 Windows）**：显式走 `cmd.exe /c`，cmd 内建命令
+  （`echo`/`dir`/`set`）与 `%VAR%` 展开原样可用，引号开头的 exe 路径直接写、
+  不需要 `&` 调用符。POSIX 上显式传 `cmd` 会报错引导改 `auto`（不静默换壳）。
+  实现要点：cmd 的 `/c` 有「命令以引号开头且引号多于两个 → 剥掉首尾各一个」
+  的旧规则，argv 形式还会被 `list2cmdline` 插 `\"` 转义，故 cmd 走原始命令行
+  （`COMSPEC /c "<命令>"`，外层引号被剥离后正好还原用户原文）。
+- **乱码条件提示（仅 Windows）**：输出含 U+FFFD 时，在**元信息区**（编码行之后、
+  `————以下为…————` 分隔线之前；超时分支在「输出末尾 20 行」之前）追加一行
+  `（疑似发现乱码：若是 Python 程序，推荐使用参数 patch_win_py_utf8=true）`；
+  覆盖 exec 前台（含截断/超时）、check、read_stdout。正常输出零噪声；非
+  Windows 平台**不弹**——提示指向的参数在那边不存在，给了也没用。
+
+### Removed
+- **`chcp 65001` 前缀**：PowerShell 设置 `[Console]::OutputEncoding` 本身就会
+  调 `SetConsoleOutputCP`，chcp 冗余（多一个进程、多一次码页写入）；Python
+  的管道输出由 `PYTHONUTF8` 决定，与码页无关。副作用随之收敛：不开开关时
+  完全不碰控制台码页。
+
+### Fixed
+
+- **pwsh 壳下「引号开头的路径命令」`ParserError`**：`"C:\Program Files\x.exe" -a`
+  被 PowerShell 当成「字符串表达式 + 意外标记」直接报错（`表达式或语句中存在
+  意外的标记`）。现在自动补 `&` 调用运算符（`& "..." -a`）。判定收紧为
+  **引号里像程序路径**（含 `\` 或 `/`，或以 `.exe/.bat/.cmd/.com/.ps1/.py/.sh`
+  结尾）**且后面还跟参数**：字符串表达式（`'A'+'B'`、`"abc" -eq "x"`、
+  `"abc"[0]`、`.Length`）、纯字面量、管道/重定向/注释一律原样；仅
+  `pwsh`/`powershell` 生效，cmd/bash 壳不受影响。**只补命令开头那一条语句**
+  （多语句用 `;`/换行拼接时后面的引号路径不改写，需拆成多次调用或 `no_shell`）。
+- **`command` 传 argv 列表却漏了 `no_shell=True`**：通道会把列表 JSON 字符串化
+  （`'["echo","x"]'`），旧版直接喂给 shell，报的是 `“[”后缺少类型名称` 这类
+  指向命令本身的语法错。现在识别为 JSON 数组并直接报「传 argv 列表需同时设
+  `no_shell=True`」。
+- **`write_stdin` 有损写入不再静默**：目标 codec 表示不了的字符会被
+  `errors="replace"` 换成 `?`，旧版照样回报「写入 N 字符」。现在写入前数一次，
+  有损时回执末尾注明「注意：N 个字符无法用 <codec> 编码，已替换为 ?」。
+- **`no_shell` 找不到程序时点出是哪个 exe**：旧版只有裸 `[WinError 2]
+  系统找不到指定的文件`（传内建命令如 `echo` 时极易误判成路径/权限问题）；
+  现在从异常链里取出 `FileNotFoundError` 并报「找不到可执行文件「<argv[0]>」」。
+- **Windows 上 `bash` 落到 WSL 启动器时给出警告**：本机无 Git Bash 时
+  `shutil.which("bash")` 解析到 `System32\bash.exe`（WSL 启动器），实测它会把
+  `$变量` 与引号提前吞掉（`X=42; echo "VAR-$X"` → `VAR-`，exit=0，静默错果）。
+  现在返回头会显式标注该风险并建议改用 `no_shell` / `pwsh` / `cmd`。
+- **`send_sigint` 谎称已终止**：Windows 下 CTRL_BREAK 对 shell 包装的命令
+  （`pwsh -Command` / `cmd /c`）常收不到——实测 `pwsh → cmd → ping` 三层连发两次
+  仍 `running`，旧文案却称「进程以 0xC000013A 被 OS 终止」。现在发送后等 1 秒
+  实测，返回里明写「实测：1 秒内已结束 / 1 秒后仍在运行（需要终止请用
+  `send_sigkill`）」。
+
+### Known trade-offs
+- 开关打开时 `PYTHONUTF8=1` 连带把子进程 `open()` 默认编码改成 utf-8：
+  写文件变 UTF-8、读 GBK 文件会 `UnicodeDecodeError`。要保留旧行为可传
+  `env={"PYTHONUTF8": "0"}`。
+- 不开关时 3.13 Python 子进程仍按本机 locale 输出 GBK，而 `auto` 解成什么
+  取决于控制台码页（本机曾被漂到 65001）——这是老行为的固有随机性，
+  乱码条件提示是兜底。
+
+### Tests
+- `tests/test_exec_params.py` encoding 段：默认 auto 标注 / 显式 codec /
+  `local` 拒绝 / 未知 codec / 开关强制 utf-8 且标注忽略 / 开关端到端
+  中文+emoji / 默认不走补丁 / 乱码提示出现与静默 / `_auto_codec` 钉码页。
+- `tests/test_windows_utf8.py` 重写：参数默认值（auto + False）、前缀只钉
+  PS 且不含 chcp、cmd/其他壳空前缀、`PYTHONUTF8` 注入与用户优先、
+  子进程 `utf8_mode` 开关对照、POSIX 忽略开关。
+- `tests/test_ps_quote_fix.py` 18 用例：需补 `&` 的形态（双/单引号、带缩进、
+  `2>&1`、反引号与双写引号转义）、原样返回的形态（纯字面量、管道、字符串
+  运算符、重定向、注释、未闭合引号、普通命令、非 PS 壳、空命令），以及两条
+  接线用例（exec 真跑引号路径命令成功、字符串管道不被改写）。
+
+
 ## [0.6.9] - 2026-11-15
 
 `process_tools_list` 显示运行中进程的通知注册状态。

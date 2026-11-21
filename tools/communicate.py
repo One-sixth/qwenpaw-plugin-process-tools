@@ -10,6 +10,7 @@ try:
     from ..utils import (
         make_error,
         make_success,
+        mojibake_hint,
         parse_int,
         parse_process_id,
     )
@@ -19,6 +20,7 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
     from utils import (
         make_error,
         make_success,
+        mojibake_hint,
         parse_int,
         parse_process_id,
     )
@@ -37,7 +39,7 @@ async def process_tools_communicate(
     max_bytes: int = 8192,
     group: bool = False,
 ):
-    """与托管进程交互。action 四选一：write_stdin=写标准输入（应答提示/送代码）；read_stdout=读输出缓冲（增量续读）；send_sigint=中断信号（Windows 下直接终止，优雅退出改用 stdin）；send_sigkill=强杀进程及子孙。
+    """与托管进程交互。action 四选一：write_stdin=写标准输入（应答提示/送代码）；read_stdout=读输出缓冲（增量续读）；send_sigint=发送中断（Windows 送 CTRL_BREAK，对 shell 包装的命令常无效，以返回里的「实测」行为准；要确定终止用 send_sigkill）；send_sigkill=强杀进程及子孙。
 
     Args:
         process_id: 进程编号 #N（支持 1、"1"、"#1" 三种写法）。
@@ -75,7 +77,16 @@ async def process_tools_communicate(
                 "发送中断", f"进程 #{num} 已不存在（状态 {mp.status}）",
             )
         note = mp.signal_interrupt(group=bool(group))
-        return make_success(note)
+        # 实测校验：Windows 下 CTRL_BREAK 对 shell 包装的命令常无效
+        # （2026-11-21 复现：pwsh → cmd → ping 三层，连发两次仍 running）。
+        # 只报"已发送"是实话，报"已终止"就是谎话——所以等一小会儿看结果。
+        exited = await mp.wait(timeout=1.0)
+        observed = (
+            "实测：1 秒内已结束"
+            if exited is not None
+            else "实测：1 秒后仍在运行（该事件没送达，需要终止请用 send_sigkill）"
+        )
+        return make_success(f"{note}\n{observed}")
     # send_sigkill
     if mp.status != "running":
         return make_success(
@@ -83,6 +94,19 @@ async def process_tools_communicate(
         )
     note = await mp.kill()
     return make_success(f"{note}，进程 #{num} 状态 → {mp.status}")
+
+
+def _unencodable_count(text: str, encoding: str) -> int:
+    """目标 codec 无法表示的字符数（逐字符试编码；codec 名无效时返回 0）。"""
+    n = 0
+    for ch in text:
+        try:
+            ch.encode(encoding)
+        except UnicodeEncodeError:
+            n += 1
+        except LookupError:
+            return 0
+    return n
 
 
 async def _do_write_stdin(mp, text: str, append_newline: bool):
@@ -93,13 +117,16 @@ async def _do_write_stdin(mp, text: str, append_newline: bool):
     payload = text
     if append_newline and not payload.endswith("\n"):
         payload += "\n"
+    # 目标 codec 表示不了的字符会被 errors="replace" 静默换成 ?：写之前数一下，
+    # 有损时明确告知（否则调用方以为原样送达，实际丢了字）。
+    lossy = _unencodable_count(payload, mp.encoding)
     error = await mp.write_stdin(payload)
     if error:
         return make_error("写入 stdin", error)
-    return make_success(
-        f"已向进程 #{mp.num} 的 stdin 写入 {len(payload)} 字符"
-        "（未回显，可用 read_stdout 查看响应）"
-    )
+    note = ""
+    if lossy:
+        note = f"\n（注意：{lossy} 个字符无法用 {mp.encoding} 编码，已替换为 ?）"
+    return make_success(f"已向进程 #{mp.num} 的 stdin 写入 {len(payload)} 字符" + note)
 
 
 async def _do_read_stdout(mp, read_offset: Optional[int], max_bytes: Optional[int]):
@@ -124,8 +151,10 @@ async def _do_read_stdout(mp, read_offset: Optional[int], max_bytes: Optional[in
     if start > offset:
         dropped_note = f"（请求偏移已滑出环形缓冲，从 {start} 起读）"
     hit_cap = len(data) >= size
+    hint = mojibake_hint(text)
     return make_success(
-        f"————以下为净化输出 [{start},{next_offset}) "
+        (f"{hint}\n" if hint else "")
+        + f"————以下为净化输出 [{start},{next_offset}) "
         f"共 {len(data)} 字节{dropped_note}————\n"
         f"{text}"
         + (

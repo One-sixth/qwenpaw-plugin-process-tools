@@ -9,6 +9,7 @@ try:
         escape_ctrl,
         make_error,
         make_success,
+        mojibake_hint,
         parse_int,
         parse_process_id,
         truncate_line,
@@ -19,6 +20,7 @@ except ImportError:  # 兼容 pytest 直接以项目根导入
         escape_ctrl,
         make_error,
         make_success,
+        mojibake_hint,
         parse_int,
         parse_process_id,
         truncate_line,
@@ -67,7 +69,12 @@ async def process_tools_check(process_id, tail_lines: int = 20):
     more = ""
     if size > len(body.encode("utf-8", errors="replace")):
         more = f"\n（日志共 {size} 字节，可用 file_tools_read_lines 读全文）"
-    return make_success(f"{head}\n————以下为输出末尾————\n{body}{more}")
+    hint = mojibake_hint(body)
+    return make_success(
+        f"{head}"
+        + (f"\n{hint}" if hint else "")
+        + f"\n————以下为输出末尾————\n{body}{more}"
+    )
 
 
 def _parse_tail(value):
