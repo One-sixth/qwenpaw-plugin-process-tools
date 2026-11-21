@@ -108,7 +108,7 @@ qwenpaw app
 >
 > 注意：`&` 只补在**命令开头那一条语句**上——用 `;` 或换行拼起来的多条语句，后面的引号路径不会被改写（`"…\a.exe" x; "…\b.exe" y` 仍会 ParserError），请拆成多次调用，或改用 `no_shell=True` 传 argv。
 
-> **Windows 编码（v0.7.1 起）**：`encoding` 默认 `auto`=本机编码（取控制台输出码页）。**跑 Python 程序时建议加 `patch_win_py_utf8=true`**：会向子进程注入 `PYTHONUTF8=1`、把 PowerShell 控制台 IO 编码钉成 UTF-8，并强制按 utf-8 解码（此时 `encoding` 参数被忽略）。不开开关时行为与旧版一致，不碰控制台码页。输出里出现替换符（`�`）时会在**元信息区**（`check`/`read_stdout` 各自的分隔线之前；`exec` 前台为编码行之后、分隔线之前；超时分支在「输出末尾 20 行」之前）追加一行提示建议改用该参数（仅 Windows 触发）。
+> **Windows 编码（v0.7.1 起）**：`encoding` 默认 `auto`=本机编码（取控制台输出码页）。**跑 Python 程序时建议加 `patch_win_py_utf8=true`**：会向子进程注入 `PYTHONUTF8=1`、把 PowerShell 控制台 IO 编码钉成 UTF-8，并强制按 utf-8 解码（此时 `encoding` 参数被忽略）。不开开关时行为与旧版一致，不碰控制台码页。输出里出现替换符（`�`）时会在**元信息区**（`check`/`read_stdout` 各自的分隔线之前；`exec` 前台为编码行之后、分隔线之前；超时分支在分隔线 `————以下为输出末尾————` 之前（v0.7.2 起；此前为「输出末尾 20 行：」文字标签））追加一行提示建议改用该参数（仅 Windows 触发）。
 >
 > ⚠️ **`auto` 的已知局限**：控制台码页是整机共享属性，可能被设成 65001（或被 `patch_win_py_utf8` 顶成 65001），而按 ANSI 写管道的原生程序（如 3.13 Python）仍输出 cp936 → 默认路径会错配、中文乱码（有乱码提示兜底）。同样地 **stdin 方向**也按同一个 codec 编码，错配时写中文会静默乱码——用 `patch_win_py_utf8=true` 或显式 `encoding="gbk"` 可解决。
 

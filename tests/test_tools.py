@@ -39,12 +39,34 @@ def test_exec_foreground_empty_output():
 
 def test_exec_foreground_timeout_kills():
     chunk = run(
+        process_tools_exec(
+            py_cmd("import time; print('slow-start'); time.sleep(300)"),
+            timeout=1,
+        )
+    )
+    assert is_error(chunk)
+    text = chunk_text(chunk)
+    assert "超时" in text
+    mp = get_manager().list_session()[0]
+    assert mp.status == "killed"
+    # v0.7.2：建议文案与乱码提示全部留在元信息区，输出段只放程序输出——
+    # 建议文案绝不能出现在程序输出（slow-start）之后
+    assert "background=True" in text
+    assert "————以下为输出末尾————" in text
+    assert "slow-start" in text
+    assert text.index("background=True") < text.index("————以下为输出末尾————")
+    assert text.index("完整日志") < text.index("slow-start")
+
+
+def test_exec_foreground_timeout_empty_output():
+    """v0.7.2：超时且无输出走「（无输出）」占位，不加分隔线（与前台正常路径对齐）。"""
+    chunk = run(
         process_tools_exec(py_cmd("import time; time.sleep(300)"), timeout=1)
     )
     assert is_error(chunk)
-    assert "超时" in chunk_text(chunk)
-    mp = get_manager().list_session()[0]
-    assert mp.status == "killed"
+    text = chunk_text(chunk)
+    assert "（无输出）" in text
+    assert "以下为" not in text
 
 
 def test_exec_empty_command():

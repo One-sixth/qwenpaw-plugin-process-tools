@@ -280,18 +280,22 @@ async def process_tools_exec(
         raise
 
     if rc is None and wait_timeout is not None:
-        # 超时 → 杀进程 → 返回超时前输出末尾 20 行 + 自解释建议
+        # 超时 → 杀进程 → 返回超时前输出末尾 20 行 + 自解释建议。
+        # 插件文本（超时说明/建议/乱码提示）全部留在元信息区（分隔线之前），
+        # 输出段只放程序输出——建议文案绝不能贴在输出末尾被当成程序 stdout。
         note = await mp.kill()
         lines, _size = mp.get_log_tail(20)
-        tail = "\n".join(lines) if lines else "（无输出）"
+        tail = "\n".join(lines) if lines else ""
         hint = mojibake_hint(tail)
+        out_part = (
+            f"\n————以下为输出末尾————\n{tail}" if lines else "\n（无输出）"
+        )
         return make_error(
-            "命令执行",
-            f"等待 {timeout} 秒超时，进程已被终止（{note}）。"
-            + (f"\n{hint}" if hint else "")
-            + f"\n输出末尾 20 行：\n{tail}",
+            f"命令执行失败：等待 {timeout} 秒超时，进程已被终止（{note}）。"
             "如果是长时间任务，可加大 timeout 或改用 background=True 后台运行；"
-            f"完整日志：{mp.log_path}",
+            f"完整日志：{mp.log_path}。"
+            + (f"\n{hint}" if hint else "")
+            + out_part,
         )
 
     elapsed = time.time() - start_ts
